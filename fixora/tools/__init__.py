@@ -124,6 +124,17 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
                  "test_path": {"type": "string", "description": "Optional path, e.g. tests/test_cart.py"}},
               "required": []},
              lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path") or None)),
+        Tool("search_semantic",
+             "Hybrid code retrieval (BM25 + local vector similarity, RRF-fused) over AST chunks "
+             "(functions, classes, tests, module top-level). Give a natural-language query "
+             "(symbols, behaviours, error text) and get the most relevant chunks with path, symbol, "
+             "line range and score. Use to LOCATE code; search_code for exact strings; read_file for "
+             "full context. Never re-read files already in context.",
+             {"type": "object", "properties": {
+                 "query": {"type": "string", "description": "What to look for"},
+                 "k": {"type": "integer", "description": "Number of chunks (default 5, max 10)"}},
+              "required": ["query"]},
+             lambda a: rag_tools.search_semantic(sandbox, a["query"], a.get("k") or 5)),
         Tool("retrieve_code",
              "Semantic-ish lexical (BM25) retrieval over the repo. Give it a natural-language query "
              "(e.g. 'stock_level inventory import error') and it returns the most relevant code chunks "

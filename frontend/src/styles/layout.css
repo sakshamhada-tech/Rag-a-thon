@@ -245,3 +245,10 @@ html.resizing-panels, html.resizing-panels * { cursor: col-resize !important; us
 @media (prefers-reduced-motion: reduce) {
   .button:hover:not(:disabled), .icon-button:hover, .source-option:hover, .run-item:hover, .event-row:hover { transform: none !important; }
 }
+
+/* Retrieval / memory rows in the timeline */
+.retrieval-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-2); }
+.retrieval-list li { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); background: var(--surface-2); }
+.retrieval-loc { font-size: var(--text-xs); color: var(--text); overflow-wrap: anywhere; }
+.retrieval-snippet { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.4; max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
+.event-detail details > summary { cursor: pointer; color: var(--text-faint); font-size: var(--text-xs); padding: var(--space-1) 0; }

@@ -12,7 +12,9 @@ import re
 from ..config import MAX_OUTPUT_CHARS
 from ..llm import LLMError
 from ..reasoning import select_reasoning_effort
-from ..rag import retriever_for
+from ..retrieval import retriever_for, build_failure_queries
+from ..query_assist import rewrite_queries, rerank
+from .. import memory
 
 _PHASE_ROLES = {"analyse": "Developer", "plan": "Developer", "fix": "Developer", "review": "Reviewer"}
 
@@ -26,23 +28,27 @@ Do not re-read files you already have.
 
 _PHASE_DETAILS = {
     "analyse": ("Explore the repo: list the tree, identify entry points, dependencies and "
-                "where the tests live. Read only — do not modify anything. "
+                "where the tests live. Use search_semantic to LOCATE code by behaviour, "
+                "search_code for exact strings, read_file for full context. Read only — do not modify anything. "
                 "If you find the bug, do NOT patch it here; describe it in the summary.",
                 ["list_tree", "read_file", "search_code", "get_dependencies",
-                 "retrieve_code"]),
-    "plan": ("State the suspected root cause and a concrete fix plan. Use search/read tools "
-             "to gather evidence first. Read only — do not modify anything. "
+                 "retrieve_code", "search_semantic"]),
+    "plan": ("State the suspected root cause and a concrete fix plan. Use search_semantic to LOCATE, "
+             "search_code for exact strings, read_file for full context. Read only — do not modify anything. "
              "If you are fairly sure how to fix it, describe the exact edit instead of making it.",
              ["list_tree", "read_file", "search_code", "get_dependencies",
-              "retrieve_code"]),
-    "fix": ("Edit the code to fix the bug using write_file / apply_patch. Prefer small, exact "
+              "retrieve_code", "search_semantic"]),
+    "fix": ("Use search_semantic to LOCATE code by behaviour, search_code for exact strings, "
+            "read_file for full context; never re-read files already in context. "
+            "Fix the bug using write_file / apply_patch. Prefer small, exact "
             "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
             "if unsure. If the failure diagnosis is dependency_missing and the repo declares "
             "the missing package, call install_dependencies FIRST, then re-check the tests. "
             "install_dependencies installs only the repo's own declared dependencies and cannot "
             "take package names; it is safe to call when unsure.",
             ["read_file", "search_code", "list_tree", "get_dependencies",
-             "write_file", "apply_patch", "install_dependencies"]),
+             "write_file", "apply_patch", "install_dependencies",
+             "retrieve_code", "search_semantic"]),
     "review": ("You are the Reviewer. Inspect changed files with read-only tools if needed. "
                "Never call tools named json, commentary, output_final or similar pseudo-tools; "
                "if no read-only tool is needed, reply directly with the JSON object. Output "
@@ -126,43 +132,62 @@ def _clip(text: str, limit: int = 900) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _rag_query(state: dict) -> str:
-    """Build the retrieval query from everything the run already knows."""
-    parts = [str(state.get("task") or "")]
-    r = state.get("last_test_result") or {}
-    diag = r.get("diagnosis") or {}
-    if diag:
-        parts += [str(diag.get("summary", "")), str(diag.get("module") or ""),
-                  " ".join(str(e) for e in diag.get("exceptions", []))]
-    parts += [str(t) for t in (r.get("failing_tests") or [])[:5]]
-    plan = state.get("plan") or ""
-    if plan:
-        parts.append(str(plan)[:400])
-    return " ".join(p for p in parts if p).strip()
+def _memory_block(ctx, state: dict) -> str:
+    hints = memory.relevant_hints(state, k=2)
+    block = memory.hints_block(hints)
+    if hints:
+        ctx.log_step("memory", f"prior knowledge applied ({len(hints)} lesson(s))",
+                     lessons=[{"symptom": h.get("symptom"), "score": h.get("score")} for h in hints])
+        ctx.emitter.emit("memory", applied=True,
+                         lessons=[{"symptom": h.get("symptom"), "root_cause": h.get("root_cause"),
+                                   "fix_summary": h.get("fix_summary"), "outcome": h.get("outcome"),
+                                   "score": h.get("score")} for h in hints])
+    return block
 
 
 def _rag_block(ctx, state: dict, k: int = 5) -> str:
-    """Top-k retrieved chunks to ground the prompt (empty string when disabled/empty)."""
+    """Hybrid RAG block (failure-driven queries + hybrid retrieval + optional
+    QUERY_REWRITE / RERANK boosters). Returns "" when disabled or empty."""
     import os
     flag = (os.environ.get("FIXORA_RAG", "1") or "1").strip().lower()
     if flag in ("0", "false", "off", "no"):
         return ""
-    query = _rag_query(state)
-    if not query:
-        return ""
     try:
-        chunks = retriever_for(ctx.sandbox).retrieve(query, k=k)
+        retriever = retriever_for(ctx.sandbox)
+        local_queries = build_failure_queries(state)
+        rewritten = rewrite_queries(ctx, state)   # [] when flagged off / unavailable
+        queries = local_queries + [q for q in rewritten if q not in local_queries]
+        query = queries[0] if queries else (state.get("task", "") or "bug")
+        extra = queries[1:]
+        t0 = __import__("time").perf_counter()
+        candidates = retriever.top_candidates(query, extra_queries=extra, k=15)
+        chunks, rerank_applied = rerank(ctx, state, candidates, k=k)
+        stats = retriever.stats()
+        build_ms = stats.get("build_ms", 0.0)
+        ctx.log_step("rag",
+                     f"retrieved {len(chunks)} chunks ({stats.get('backend')})",
+                     queries=queries, files=[c["path"] for c in chunks],
+                     rerank_applied=rerank_applied, backend=stats.get("backend"),
+                     chunks_indexed=stats.get("chunks", 0), build_ms=build_ms,
+                     latency_ms=round((__import__("time").perf_counter() - t0) * 1000, 1))
+        ctx.emitter.emit("retrieval", queries=queries,
+                         rerank_applied=rerank_applied, backend=stats.get("backend"),
+                         chunks_indexed=stats.get("chunks", 0), build_ms=build_ms,
+                         chunks=[{"path": c["path"], "symbol": c.get("symbol", ""),
+                                  "kind": c.get("kind", ""),
+                                  "start_line": c["start_line"], "end_line": c["end_line"],
+                                  "score": c["score"], "snippet": _clip(c["text"], 700)}
+                                 for c in chunks])
     except Exception as e:
         ctx.log_step("rag", f"retrieval unavailable: {e}")
         return ""
     if not chunks:
         return ""
-    ctx.log_step("rag", f"retrieved {len(chunks)} chunks", query=query[:160],
-                 files=[c["path"] for c in chunks])
     blocks = []
     for c in chunks:
-        blocks.append(f"--- {c['path']}:{c['start_line']}-{c['end_line']} "
-                      f"(score {c['score']}) ---\n{_clip(c['text'], 900)}")
+        tag = f"{c['path']}:{c['start_line']}-{c['end_line']}"
+        symbol = c.get("symbol") or ""
+        blocks.append(f"--- {tag} :: {c.get('kind', '')} {symbol} (score {c['score']}) ---\n{_clip(c['text'], 900)}")
     return ("\n\nRelevant code retrieved from the repo (use as pointers; verify with "
             "read_file before editing):\n" + "\n\n".join(blocks))
 
@@ -200,7 +225,8 @@ def _test_context(state: dict) -> str:
 def analyse_node(ctx, state: dict) -> dict:
     instruction = (f"Task: {state['task']}\n\nExplore the repo and write a short repo_summary: "
                    "layout, entry points, dependencies, where the tests live."
-                   + _rag_block(ctx, state, k=4))
+                   + _rag_block(ctx, state, k=4)
+                   + _memory_block(ctx, state))
     effort = select_reasoning_effort("analyse", state)
     summary, msgs = run_developer(ctx, "analyse", state, instruction + ctx.already_read_block(),
                                   reasoning_effort=effort)

@@ -1,4 +1,4 @@
-import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, Loader2, Rocket, ShieldCheck, Stethoscope, XCircle } from 'lucide-react';
+import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, LibraryBig, Loader2, Rocket, ShieldCheck, Stethoscope, XCircle } from 'lucide-react';
 import type { FixoraEvent } from '../api/types';
 
 export type AgentKind = 'developer' | 'tester' | 'reviewer' | 'system';
@@ -29,6 +29,8 @@ function iconFor(event: FixoraEvent) {
     case 'llm_call': return <Brain aria-hidden="true" className="icon" />;
     case 'llm_error': return <XCircle aria-hidden="true" className="icon" />;
     case 'diagnosis': return <Stethoscope aria-hidden="true" className="icon" />;
+    case 'retrieval': return <LibraryBig aria-hidden="true" className="icon" />;
+    case 'memory': return <LibraryBig aria-hidden="true" className="icon" />;
     default: return <Loader2 aria-hidden="true" className="icon" />;
   }
 }
@@ -46,6 +48,8 @@ function titleFor(event: FixoraEvent): string {
     case 'llm_call': return 'Model call completed';
     case 'llm_error': return 'Model call failed';
     case 'diagnosis': return `Diagnosis: ${String(event.label || event.category || 'unknown')}`;
+    case 'retrieval': return `Retrieval: ${event.chunks?.length ?? 0} chunks (${String(event.backend || 'local')})`;
+    case 'memory': return 'Prior knowledge used';
     default: return event.type.replace(/_/g, ' ');
   }
 }
@@ -61,6 +65,50 @@ function detailFor(event: FixoraEvent): string | null {
     return parts.filter(Boolean).join(' · ') || null;
   }
   if (event.type === 'test_result' && Array.isArray(event.failing_tests) && event.failing_tests.length) return `Failing: ${event.failing_tests.join(', ')}`;
+  if (event.type === 'memory' && Array.isArray(event.lessons) && event.lessons.length) {
+    return `${event.lessons.length} lesson(s) — hints only, verified independently`;
+  }
+  return null;
+}
+
+function ExtraDetail({ event }: { event: FixoraEvent }) {
+  if (event.type === 'retrieval') {
+    const chunks = Array.isArray(event.chunks) ? event.chunks : [];
+    const queries = Array.isArray(event.queries) ? event.queries.join(' | ') : '';
+    return (
+      <div className="event-detail">
+        {queries && <div className="muted">queries: {queries}</div>}
+        <div className="muted">index: {event.chunks_indexed ?? '?'} chunks{typeof event.build_ms === 'number' ? `, built in ${event.build_ms}ms` : ''}{event.rerank_applied ? ' · rerank applied' : ''}</div>
+        {chunks.length > 0 && (
+          <details>
+            <summary>Retrieved code ({chunks.length})</summary>
+            <ul className="retrieval-list">
+              {chunks.map((c, i) => (
+                <li key={i}>
+                  <div className="mono retrieval-loc">{c.path}:{c.start_line}-{c.end_line} · {c.kind || 'chunk'} {c.symbol ? `· ${c.symbol}` : ''} · score {c.score ?? '?'}</div>
+                  <pre className="retrieval-snippet">{c.snippet}</pre>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    );
+  }
+  if (event.type === 'memory' && Array.isArray(event.lessons) && event.lessons.length) {
+    return (
+      <div className="event-detail">
+        <ul className="retrieval-list">
+          {event.lessons.map((l, i) => (
+            <li key={i}>
+              <div>{l.symptom}</div>
+              <div className="muted">root cause: {l.root_cause} · fix: {l.fix_summary} · outcome: {l.outcome}</div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
   return null;
 }
 
@@ -73,7 +121,8 @@ export function StepRow({ event }: { event: FixoraEvent }) {
       <AgentMarker agent={agent} />
       <div className="event-body">
         <div className="event-title"><span className="event-title-icon" aria-hidden="true">{iconFor(event)}</span><span className="event-title-text">{titleFor(event)}</span></div>
-        {detailFor(event) && <div className="event-detail">{detailFor(event)}</div>}
+        {detailFor(event) && !(event.type === 'retrieval' || event.type === 'memory') && <div className="event-detail">{detailFor(event)}</div>}
+        <ExtraDetail event={event} />
       </div>
       <div className="event-actions mono">{ms}</div>
     </div>

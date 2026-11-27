@@ -104,10 +104,10 @@ def index():
     if index_html.is_file():
         return FileResponse(index_html)
     return {
-        "service": "Fixora Phase 3 API",
+        "service": "Fixora API",
         "status": "ok",
         "message": "Frontend not built. Run `npm --prefix frontend install && npm --prefix frontend run build`, or use /docs for the API.",
-        "endpoints": ["/health", "/config", "/demos", "/runs", "/docs", "/openapi.json"],
+        "endpoints": ["/health", "/config", "/demos", "/runs", "/memory", "/docs", "/openapi.json"],
     }
 
 
@@ -126,6 +126,13 @@ def demos():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/memory")
+def memory_list():
+    from .memory import load_lessons
+    lessons = load_lessons()
+    return {"count": len(lessons), "lessons": lessons[-20:]}
 
 
 @app.post("/runs", status_code=202)

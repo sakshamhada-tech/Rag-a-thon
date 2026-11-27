@@ -28,7 +28,33 @@ export interface FixoraEvent {
   exceptions?: string[];
   patch_file?: string;
   applied_to?: string;
+  queries?: string[];
+  backend?: string;
+  chunks_indexed?: number;
+  build_ms?: number;
+  rerank_applied?: boolean;
+  chunks?: RetrievalChunk[];
+  applied?: boolean;
+  lessons?: MemoryLesson[];
   [key: string]: unknown;
+}
+
+export interface RetrievalChunk {
+  path: string;
+  symbol?: string;
+  kind?: string;
+  start_line?: number;
+  end_line?: number;
+  score?: number;
+  snippet?: string;
+}
+
+export interface MemoryLesson {
+  symptom?: string;
+  root_cause?: string;
+  fix_summary?: string;
+  outcome?: string;
+  score?: number;
 }
 
 export interface TestResult {

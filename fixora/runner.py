@@ -24,6 +24,7 @@ from .config import Settings, load_settings
 from .events import EventEmitter
 from .github import RepoInputError, is_github_url, clone_public_repo
 from .llm import LLMError, FallbackLLMClient, get_llm
+from . import memory
 from .sandbox import Sandbox, SandboxError, _snapshot
 from .tools import build_tools
 from .agents.common import RunContext
@@ -195,6 +196,12 @@ class RunManager:
             record.report = final.get("report", {})
             record.status = final.get("status", "failed")
             record.report.setdefault("timings", ctx.timings())
+            if record.report:
+                repo_name = record.repo_input.rstrip("/").rsplit("/", 1)[-1]
+                lesson = memory.save_run(repo_name, record.task, record.report)
+                if lesson and ctx:
+                    ctx.log_step("memory", "lesson recorded for future runs",
+                                 outcome=lesson.get("outcome"))
         except RepoInputError as e:
             record.status, record.error = "error", str(e)
             record.report = {"status": "error", "error": str(e)}

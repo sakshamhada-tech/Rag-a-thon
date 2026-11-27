@@ -43,6 +43,8 @@ class ToolCall:
 class LLMResponse:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Token usage reported by the provider ({"prompt_tokens","completion_tokens","total_tokens"}); None for mock.
+    usage: dict | None = None
 
 
 def _truncate(s: str, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -87,7 +89,9 @@ def _parse_anthropic_response(resp) -> LLMResponse:
             calls.append(ToolCall(id=str(_get(block, "id", "")),
                                   name=name,
                                   arguments=_parse_tool_arguments(_get(block, "input", {}), name)))
-    return LLMResponse(text=text, tool_calls=calls)
+    usage = _get(resp, "usage") or {}
+    usage = dict(usage) if isinstance(usage, dict) else {k: _get(usage, k) for k in ("input_tokens", "output_tokens")}
+    return LLMResponse(text=text, tool_calls=calls, usage=_usage_dict(usage))
 
 
 def _parse_openai_response(resp) -> LLMResponse:
@@ -103,7 +107,26 @@ def _parse_openai_response(resp) -> LLMResponse:
         calls.append(ToolCall(id=str(_get(tc, "id", f"call_{i}")),
                               name=name,
                               arguments=_parse_tool_arguments(_get(fn, "arguments", {}), name)))
-    return LLMResponse(text=text, tool_calls=calls)
+    usage = _get(resp, "usage") or {}
+    usage = dict(usage) if isinstance(usage, dict) else {}
+    return LLMResponse(text=text, tool_calls=calls, usage=_usage_dict(usage))
+
+
+def _usage_dict(usage: dict) -> dict | None:
+    if not usage:
+        return None
+    # normalise both provider shapes to OpenAI-style keys
+    out = {}
+    inp = usage.get("prompt_tokens", usage.get("input_tokens"))
+    outp = usage.get("completion_tokens", usage.get("output_tokens"))
+    tot = usage.get("total_tokens", (inp or 0) + (outp or 0) if (inp is not None or outp is not None) else None)
+    if inp is not None:
+        out["prompt_tokens"] = int(inp)
+    if outp is not None:
+        out["completion_tokens"] = int(outp)
+    if tot is not None:
+        out["total_tokens"] = int(tot)
+    return out or None
 
 
 def _supports_reasoning(model: str, base_url: str | None) -> bool:
@@ -396,7 +419,10 @@ class FallbackLLMClient:
                 continue
             for attempt in range(2):
                 try:
-                    return client.chat(messages, tools, reasoning_effort=reasoning_effort)
+                    resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
+                    if resp.usage:
+                        _log_usage(label, resp.usage)
+                    return resp
                 except LLMError as e:
                     last_error = e
                     if not _is_retryable(e):
@@ -418,6 +444,12 @@ class FallbackLLMClient:
             raise LLMError(f"All {len(self.clients)} providers are on cooldown "
                            f"(retryable errors, e.g. rate limits); next retry in ~{retry_in}s")
         raise last_error
+
+
+def _log_usage(label: str, usage: dict):
+    print(f"[LLM USAGE] provider={label} "
+          f"prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} "
+          f"total={usage.get('total_tokens')}")
 
 
 def _log_fallback(message: str):

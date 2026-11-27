@@ -72,6 +72,27 @@ def install_dependencies(sandbox, settings) -> str:
     return _result_payload(result, source="pyproject.toml")
 
 
+def _dir_size_mb(path: str) -> float:
+    total = 0
+    try:
+        for p in Path(path).rglob("*"):
+            try:
+                total += p.stat().st_size if p.is_file() else 0
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return round(total / (1024 * 1024), 1)
+
+
+def _size_limit_mb() -> float:
+    import os
+    try:
+        return max(1.0, float(os.environ.get("FIXORA_INSTALL_MAX_MB", "512") or 512))
+    except ValueError:
+        return 512.0
+
+
 def _result_payload(result, source: str) -> str:
     tail = _tail((result.stdout or "") + (("\n--- stderr ---\n" + result.stderr) if result.stderr else ""))
     if result.timed_out:
@@ -86,8 +107,18 @@ def _result_payload(result, source: str) -> str:
         target = str(result.argv[result.argv.index("--target") + 1])
     except (ValueError, IndexError):
         target = "<isolated dir>"
+    size_mb = _dir_size_mb(target)
+    limit = _size_limit_mb()
+    if size_mb > limit:
+        return json.dumps({"ok": False,
+                           "error": f"installed dependencies exceed the size limit ({size_mb} MB > {limit} MB); "
+                                    "the temp dir is discarded with this run",
+                           "installed_from": source, "installed_mb": size_mb, "limit_mb": limit,
+                           "output_tail": tail[-1200:]})
     return json.dumps({"ok": True,
                        "installed_from": source,
                        "target": target,
+                       "installed_mb": size_mb,
+                       "limit_mb": limit,
                        "note": "installed into an isolated temp dir; pytest runs pick it up via PYTHONPATH; the repo itself is unchanged",
                        "output_tail": tail[-1200:]})
