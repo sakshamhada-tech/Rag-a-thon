@@ -159,6 +159,11 @@ on one physical `.env` line with a non-empty model.
 
 ## FastAPI server
 
+Open `http://127.0.0.1:8000/` in a browser (or use curl). The server is a JSON
+API, not a finished frontend: `/` shows the available endpoints, `/health` returns
+`{"ok": true}`, and `/docs` shows the interactive API docs. To start a run,
+use `POST /runs` with a public GitHub URL.
+
 ```bash
 source .venv/bin/activate
 LLM_PROVIDER=groq python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
@@ -194,7 +199,7 @@ curl -OJ http://127.0.0.1:8000/runs/$run_id/patch
 ```
 
 One run at a time per server (`429` while another is active/awaiting), plus an
-overall `RUN_TIMEOUT` watchdog. CORS is enabled. Run state is in memory with a
+overall `RUN_TIMEOUT` watchdog. CORS is restricted to localhost origins by default. Run state is in memory with a
 JSON log in `logs/`.
 
 ## Demo repos

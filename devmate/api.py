@@ -75,6 +75,16 @@ class RunRequest(BaseModel):
     max_attempts: int | None = Field(default=None, ge=1, le=10)
 
 
+@app.get("/")
+def index():
+    return {
+        "service": "DevMate Phase 2 API",
+        "status": "ok",
+        "message": "This is a JSON API. Use /health for liveness, /docs for the interactive API docs, or POST /runs to start a GitHub-repo run.",
+        "endpoints": ["/health", "/runs", "/docs", "/openapi.json"],
+    }
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
