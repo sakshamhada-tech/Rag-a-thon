@@ -52,3 +52,17 @@ def test_large_diff_scores_higher_for_review():
     effort = select_reasoning_effort("review", state, diff=diff)
     assert effort == "high"
     assert complexity_score("Fix the bug", state, diff) >= 2
+
+
+def test_env_override_forces_level(monkeypatch):
+    import fixora.reasoning as r
+    monkeypatch.setattr(r, "_FORCED", "low")
+    assert r.select_reasoning_effort("review", {"task": "migrate the architecture"}, diff="x" * 100) == "low"
+    monkeypatch.setattr(r, "_FORCED", "high")
+    assert r.select_reasoning_effort("analyse") == "high"
+
+
+def test_invalid_env_override_is_ignored(monkeypatch):
+    import fixora.reasoning as r
+    monkeypatch.setattr(r, "_FORCED", "ludicrous")
+    assert r.select_reasoning_effort("analyse") in ("low", "medium", "high")

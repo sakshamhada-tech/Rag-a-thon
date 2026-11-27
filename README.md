@@ -291,6 +291,28 @@ JSON log in `logs/`.
   module (`stock_level` vs `stock_count`) blocks collection; the fix needs two
   edits (import line, then the call site), exercising the retry loop.
 
+## Speed / latency notes
+
+Local timings for the offline mock on this fixture tree: full `demo_repo_import`
+run (Analyse → Plan → Fix → re-test → Review) ≈ 3 s, of which ≈ 2 pytest
+subprocesses are ≈ 0.7 s each. On a real provider, wall-clock is dominated by the
+8–12 LLM round-trips, each carrying reasoning tokens. Levers, in order of impact:
+
+1. **Model choice** (`GROQ_MODEL`) — a strong but faster model beats a bigger one;
+   e.g. `openai/gpt-oss-20b` vs `openai/gpt-oss-120b`. Verify it parses tool calls.
+2. **`FIXORA_REASONING_EFFORT=low`** — bypasses the complexity heuristic for every
+   call (the heuristic already returns `low` for simple tasks; this forces it even
+   when the first test run fails with errors).
+3. **`--max-attempts 1`** — bounded, but gives up on the first failing iteration.
+4. **`FIXORA_PROVIDER_COOLDOWN`** — already skips dead keys instead of paying
+   2 failed attempts + a 1 s sleep per call.
+5. Endpoint stability (`base_url` latency, provider region) and output verbosity
+   of the model.
+
+There is no safe "skip tests" mode: pytest is the pass/fail signal and runs
+always (baseline + after each fix). Parallelising tool execution is not
+implemented; ordering matters for edits.
+
 ## Failure taxonomy and dependency errors
 
 Every test run is classified from real pytest output before the agent is asked

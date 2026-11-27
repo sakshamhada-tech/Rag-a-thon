@@ -5,10 +5,17 @@ to pick effort). It considers the task text, failing-test count, retry number
 and diff size. Providers that do not support reasoning_effort ignore it.
 
 Levels map to OpenAI-style values: low | medium | high.
+
+FIXORA_REASONING_EFFORT forces a single level for every call (useful for
+smoke-testing or latency-sensitive deployments); values are case-insensitive
+and invalid values are ignored.
 """
 from __future__ import annotations
 
+import os
 import re
+
+_FORCED = (os.environ.get("FIXORA_REASONING_EFFORT") or "").strip().lower()
 
 _SIMPLE_RE = re.compile(
     r"\b(typo|rename|comment|format|formatting|lint|docs?|readme|spelling|wording|"
@@ -83,6 +90,8 @@ def select_reasoning_effort(phase: str, state: dict | None = None,
                             *, task: str | None = None, diff: str | None = None,
                             attempt_number: int | None = None) -> str:
     """Pick low/medium/high for a phase from observable task complexity."""
+    if _FORCED in ("low", "medium", "high"):
+        return _FORCED
     state = state or {}
     attempt_number = int(attempt_number if attempt_number is not None
                          else state.get("attempts", 0))
