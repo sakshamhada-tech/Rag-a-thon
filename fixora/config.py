@@ -34,6 +34,8 @@ class Settings:
     clone_timeout: int          # git clone timeout for GitHub URLs
     max_repo_mb: int            # refuse to clone repos larger than this
     read_cache_chars: int       # cap on already-read file contents passed into prompts
+    allow_dependency_install: bool = True   # permit install_dependencies (repo-declared deps only)
+    install_timeout: int = 300              # pip --target timeout for dependency installation
 
 
 def load_settings() -> Settings:
@@ -63,4 +65,7 @@ def load_settings() -> Settings:
         clone_timeout=int(os.getenv("CLONE_TIMEOUT", "120")),
         max_repo_mb=int(os.getenv("MAX_REPO_MB", "50")),
         read_cache_chars=int(os.getenv("READ_CACHE_CHARS", "24000")),
+        allow_dependency_install=os.getenv("FIXORA_ALLOW_DEPENDENCY_INSTALL", "1").strip().lower()
+        not in ("0", "false", "no", "off"),
+        install_timeout=int(os.getenv("FIXORA_INSTALL_TIMEOUT", "300")),
     )

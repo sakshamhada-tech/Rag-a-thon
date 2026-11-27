@@ -2,7 +2,7 @@
 
 ## Architecture note
 
-Fixora Phase 3 keeps the Phase 2 loop and adds a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
+Fixora Phase 4 keeps the Phase 2 agent loop and the Phase 3 web UI/demo surface, and adds a failure taxonomy, sandboxed dependency installation and regression hardening for in-place edits. Phase 3 added a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
 
 Phase 2 kept the Phase 1 sandboxed loop and added caching, a reviewer
 agent, a human approval gate, a FastAPI/SSE server and strict GitHub input
@@ -127,13 +127,22 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 ## Status
 
+### Done (Phase 4)
+
+- [x] Failure taxonomy (`fixora/diagnostics.py`): classifies real pytest output into `syntax_error`, `dependency_missing`, `import_error`, `collection_error`, `no_tests`, `assertion_failure`, `runtime_error`, `timeout`, `unknown`; never executes the failing code; feeds the fix prompt, run report (`baseline_diagnosis`/`diagnosis`), a `diagnosis` timeline event, and the printer.
+- [x] Dependency errors are actionable: `install_dependencies` tool installs **only** the repo's own declared dependencies (root `requirements.txt`, or validated `[project]` specifiers — no URLs/markers/direct references, no model-named packages) into an isolated temp `--target` (never the host interpreter, never the repo copy), consumed via `PYTHONPATH`; kill switch `FIXORA_ALLOW_DEPENDENCY_INSTALL=0`.
+- [x] Sandbox subprocesses run with a minimal allowlisted environment (host API keys/`FIXORA_API_TOKEN` no longer visible to repo code).
+- [x] Bytecode staleness fix: `PYTHONDONTWRITEBYTECODE=1` for sandbox subprocesses and `__pycache__` invalidation after every edit — same-length edits within the same uint32-truncated mtime second can no longer test stale bytecode (regression test in `tests/test_bytecode_invalidation.py` pins this; it fails without the fix).
+- [x] Two new fixtures: `demo_repo_syntax` (skylark; unterminated f-string, collection blocked) and `demo_repo_import` (meridian; wrong internal import, two-edit fix). Both run to `awaiting_approval` offline via the mock provider.
+- [x] Backend tests extended to 121 passing; frontend `npm run build` passes; `diagnosis` events render in the timeline.
+
 ### Done (Phase 3)
 
 - [x] Backend additions: `GET /demos`, `GET /config` (provider/model only), demo runs via `POST /runs {demo_id, task}` with checked-in fixtures untouched (temp copy, patch-only approval), lightweight `GET /runs` summaries, SSE event sequence ids + `Last-Event-ID` replay filter.
 - [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `FIXORA_API_TOKEN` is set, API routes remain protected.
 - [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; fixed-height shell with internal scroll regions; resizable desktop regions via pointer/keyboard separators (widths persisted); compact footer; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
 - [x] Dockerfile (Node build stage + slim Python runtime with git) and `.dockerignore`.
-- [x] Backend tests extended to 97 passing; frontend `npm run build` passes.
+- [x] Backend tests extended (121 passing at the Phase 4 cut); frontend `npm run build` passes.
 
 ### Done (Phase 2)
 - [x] Tool-call dedupe/cache with `[CACHED]` marker + mutation invalidation
@@ -174,7 +183,9 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `97 passed`.
+- Unit suite: `121 passed`.
+- Failure-diagnosis end-to-end (mock, offline): `demo_repo_syntax` 1 attempt -> `awaiting_approval`; `demo_repo_import` 2 attempts -> `awaiting_approval`; checked-in fixtures untouched.
+- `install_dependencies` verified end-to-end against a locally built wheel (offline): failing tests diagnosed `dependency_missing`, isolated `pip --target` install, tests then pass. Public PyPI index path unverified.
 - Frontend production build: `npm run build` passes (TypeScript `--noEmit` + Vite).
 - Live backend smoke in this sandbox with `LLM_PROVIDER=mock`: `GET /` returns the built UI, `/config` and `/demos` return expected JSON; `demo_repo` ran to `awaiting_approval` (11 passed/3 failed before; 14 passed after), approval exported an owner-only patch and the fixture stayed clean; `demo_repo_hard` showed a real retry (`attempt 2`) and reached `awaiting_approval` with 14 passed; reject worked; checked-in demo fixtures remained untouched.
 - The static UI is served by the same FastAPI process that passed the smoke test; SSE events carry `id:` sequence numbers.
@@ -193,8 +204,9 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   public GitHub URL returns 202 and streams SSE events replaying the run;
   local approval covered by unit tests.
 
-### Phase 3 known limitations / honestly not verified
+### Phase 3/4 known limitations / honestly not verified
 
+- The Phase 4 dependency-install happy path against the public PyPI index was **not** exercised from the test suite (tests are offline); it is verified against a locally built wheel + PYTHONPATH round-trip. Real-provider behaviour for the new fixtures is unverified; only the deterministic mock was run end-to-end. Docker was not rebuilt with Phase 4 changes.
 - No real browser was available in this sandbox, so the View Transitions wipe direction, focus traversal, axe/Lighthouse audit, responsive breakpoints and screenshots were **not visually verified**. The CSS implements the specified clip-path directions; initial theme script and reduced-motion fallback follow the brief.
 - Docker was not installed in this sandbox, so `docker build` / `docker run` could not be executed here; the Dockerfile is written but unbuilt locally.
 - The UI talks to the live FastAPI app through same-origin routes; no `FIXORA_API_TOKEN` browser-auth flow is provided for EventSource (local use should leave the token unset or use an authenticating proxy).

@@ -25,6 +25,16 @@ DEMOS = [
         "name": "Ledgerline",
         "description": "Two related bugs across money.py and discounts.py. Baseline: 5 failing tests.",
     },
+    {
+        "id": "demo_repo_syntax",
+        "name": "Skylark",
+        "description": "Syntax error: unterminated f-string blocks import and test collection. Baseline: 0 passed, collection blocked.",
+    },
+    {
+        "id": "demo_repo_import",
+        "name": "Meridian",
+        "description": "Import error: wrong name imported from an internal module. Baseline: collection blocked; one-line import fix.",
+    },
 ]
 
 _SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules"}

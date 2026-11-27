@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-from . import repo_tools, edit_tools, test_tools
+from . import repo_tools, edit_tools, test_tools, dependency_tools
 
 _PY_TYPES = {"string": str, "integer": int, "number": (int, float),
              "boolean": bool, "object": dict, "array": list}
@@ -118,10 +118,18 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
               "required": ["path", "old_str", "new_str"]},
              lambda a: edit_tools.apply_patch(sandbox, a["path"], a["old_str"], a["new_str"])),
         Tool("run_tests",
-             "Run pytest in the workspace. Returns pass/fail counts, failing test names and trimmed output.",
+             "Run pytest in the workspace. Returns pass/fail counts, failing test names, a failure "
+             "diagnosis (syntax_error, dependency_missing, import_error, assertion_failure, ...) and trimmed output.",
              {"type": "object", "properties": {
                  "test_path": {"type": "string", "description": "Optional path, e.g. tests/test_cart.py"}},
               "required": []},
              lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path") or None)),
+        Tool("install_dependencies",
+             "Install the repository's OWN declared dependencies (requirements.txt, or pyproject.toml "
+             "[project] dependencies) into an isolated temp directory; pytest then sees them via PYTHONPATH. "
+             "Takes no arguments — the model cannot choose packages. Use when the diagnosis is dependency_missing. "
+             "Returns ok/error with the pip tail. Never touches the host interpreter or the repo.",
+             {"type": "object", "properties": {}, "required": []},
+             lambda a: dependency_tools.install_dependencies(sandbox, settings)),
     ]
     return {t.name: t for t in tools}

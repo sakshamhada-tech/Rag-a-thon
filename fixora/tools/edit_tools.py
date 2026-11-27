@@ -21,6 +21,7 @@ def write_file(sandbox, path: str, content: str) -> str:
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        sandbox.invalidate_bytecode()
     except OSError as e:
         return _err(f"cannot write {path}: {e}")
     return json.dumps({"ok": True, "path": sandbox.rel(target), "bytes": len(content.encode())})
@@ -52,6 +53,7 @@ def apply_patch(sandbox, path: str, old_str: str, new_str: str) -> str:
                     "provide a longer, unique anchor")
     updated = content.replace(old_str, new_str, 1)
     target.write_text(updated, encoding="utf-8")
+    sandbox.invalidate_bytecode()
     diff = "".join(difflib.unified_diff(
         content.splitlines(keepends=True), updated.splitlines(keepends=True),
         fromfile=f"a/{sandbox.rel(target)}", tofile=f"b/{sandbox.rel(target)}", n=1))

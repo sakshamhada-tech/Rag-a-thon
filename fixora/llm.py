@@ -213,6 +213,18 @@ class OpenAIClient:
 
 # -------------------------------------------------------------------- Mock
 
+def _first_source_hit(text: str, basename: str):
+    """First 'path/to/<basename>:NN:' match that is NOT a test file."""
+    matches = list(re.finditer(rf"([\w./-]*?{re.escape(basename)}):\d+:", text))
+    for candidate_m in matches:
+        path = candidate_m.group(1)
+        if re.search(r"(^|/)(tests?|specs?)/", path):
+            continue
+        if "test_" in path.rsplit("/", 1)[-1]:
+            continue
+        return candidate_m
+    return matches[0] if matches else None
+
 class MockClient:
     """Deterministic offline provider for pipeline smoke tests ONLY."""
 
@@ -257,6 +269,11 @@ class MockClient:
             if "search_code" not in tool_names:
                 return call("search_code", {"pattern": "ROUND|quantize|round|quantity", "path": "."})
             hits = next(m["content"] for m in tool_results if m.get("name") == "search_code")
+            if "(no matches)" in hits:
+                return LLMResponse(text=(
+                    "Suspected root cause is unclear from the symbol search.\n"
+                    "Fix plan: read the module the failing traceback points at, correct the "
+                    "blocking defect, then re-run the tests.\nEvidence:\n(no matches)"))
             return LLMResponse(text=(
                 "Suspected root cause: discount/money rounding helper truncates instead of using "
                 "round-half-up, so odd-cent amounts come out one cent low.\n"
@@ -267,12 +284,14 @@ class MockClient:
             all_text = "\n".join(str(m.get("content", "")) for m in messages)
             if "search_code" not in tool_names:
                 return call("search_code", {
-                    "pattern": "ROUND_DOWN|ROUND_HALF_EVEN|ROUND_HALF_UP|quantity > 25",
+                    "pattern": "ROUND_DOWN|ROUND_HALF_EVEN|ROUND_HALF_UP|quantity > 25|import |f\"\$|stock_",
                     "path": ".",
                 })
             if "read_file" not in tool_names:
-                m = (re.search(r"([\w./-]+\.py):[^\n]*quantity > 25", all_text)
-                     if "test_rate_applies_at_twentyfive_items" in all_text else None)
+                m = (_first_source_hit(all_text, "pricing.py")
+                     or _first_source_hit(all_text, "catalog.py")
+                     or (re.search(r"([\w./-]+\.py):[^\n]*quantity > 25", all_text)
+                         if "test_rate_applies_at_twentyfive_items" in all_text else None))
                 m = (m or re.search(r"([\w./-]+\.py):[^\n]*(ROUND_HALF_EVEN|ROUND_DOWN)", all_text)
                      or re.search(r"([\w./-]+\.py):[^\n]*quantity", all_text)
                      or re.search(r"([\w./-]+\.py)", all_text))
@@ -282,6 +301,18 @@ class MockClient:
                 read = next((m["content"] for m in tool_results if m.get("name") == "read_file"), "")
                 path_m = re.search(r"===== ([\w./-]+\.py)", read) or re.search(r"([\w./-]+\.py)", read)
                 target = path_m.group(1) if path_m else "swiftcart/money.py"
+                if 'return f"${total:.2f}' in read and 'return f"${total:.2f}"' not in read:
+                    return call("apply_patch", {"path": target,
+                                                "old_str": 'return f"${total:.2f}',
+                                                "new_str": 'return f"${total:.2f}"'})
+                if "from .inventory import stock_level" in read:
+                    return call("apply_patch", {"path": target,
+                                                "old_str": "from .inventory import stock_level",
+                                                "new_str": "from .inventory import stock_count"})
+                if "stock_count" in read and re.search(r"\bstock_level\(", read):
+                    return call("apply_patch", {"path": target,
+                                                "old_str": "stock_level(",
+                                                "new_str": "stock_count("})
                 for bad in ("decimal.ROUND_HALF_EVEN", "decimal.ROUND_DOWN"):
                     if bad in read:
                         return call("apply_patch", {"path": target,

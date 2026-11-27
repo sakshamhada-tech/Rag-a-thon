@@ -34,9 +34,12 @@ _PHASE_DETAILS = {
              ["list_tree", "read_file", "search_code", "get_dependencies"]),
     "fix": ("Edit the code to fix the bug using write_file / apply_patch. Prefer small, exact "
             "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
-            "if unsure.",
+            "if unsure. If the failure diagnosis is dependency_missing and the repo declares "
+            "the missing package, call install_dependencies FIRST, then re-check the tests. "
+            "install_dependencies installs only the repo's own declared dependencies and cannot "
+            "take package names; it is safe to call when unsure.",
             ["read_file", "search_code", "list_tree", "get_dependencies",
-             "write_file", "apply_patch"]),
+             "write_file", "apply_patch", "install_dependencies"]),
     "review": ("You are the Reviewer. Inspect changed files with read-only tools if needed. "
                "Never call tools named json, commentary, output_final or similar pseudo-tools; "
                "if no read-only tool is needed, reply directly with the JSON object. Output "
@@ -116,6 +119,24 @@ def _is_unavailable_tool_error(error: Exception) -> bool:
     return bool(re.search(r"(not in request\.tools|tool call validation failed|attempted to call tool|unknown tool)", text))
 
 
+def _diagnosis_block(state: dict) -> str:
+    """Render the structured diagnosis for prompt context (truncated)."""
+    r = state.get("last_test_result") or {}
+    diag = r.get("diagnosis") or {}
+    if not diag:
+        return ""
+    lines = ["", "", "Failure diagnosis: " + str(diag.get("label") or diag.get("category")),
+             "Summary: " + str(diag.get("summary", ""))]
+    if diag.get("module"):
+        lines.append(f"Missing/offending module: {diag['module']}")
+    if diag.get("files"):
+        lines.append("Files involved: " + ", ".join(str(f) for f in diag["files"]))
+    if diag.get("exceptions"):
+        lines.append("Exceptions seen: " + ", ".join(str(e) for e in diag["exceptions"]))
+    lines.append("Guidance: " + str(diag.get("guidance", "")))
+    return "\n".join(lines)
+
+
 def _test_context(state: dict) -> str:
     """Render the last test result for prompt context (truncated)."""
     r = state.get("last_test_result")
@@ -124,7 +145,8 @@ def _test_context(state: dict) -> str:
     failing = ", ".join(r.get("failing_tests", [])) or "none"
     tail = r.get("output_tail", "")[-2500:]
     return (f"\n\nLast test run: {r.get('passed', 0)} passed, {r.get('failed', 0)} failed, "
-            f"{r.get('errors', 0)} errors. Failing: {failing}\nTraceback tail:\n{tail}")
+            f"{r.get('errors', 0)} errors. Failing: {failing}{_diagnosis_block(state)}\n"
+            f"Traceback tail:\n{tail}")
 
 
 def analyse_node(ctx, state: dict) -> dict:

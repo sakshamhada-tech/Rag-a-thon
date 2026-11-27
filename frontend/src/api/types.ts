@@ -21,6 +21,11 @@ export interface FixoraEvent {
   error?: string;
   review?: ReviewVerdict;
   diff?: string;
+  category?: string;
+  label?: string;
+  summary?: string;
+  module?: string | null;
+  exceptions?: string[];
   patch_file?: string;
   applied_to?: string;
   [key: string]: unknown;

@@ -1,4 +1,4 @@
-import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, Loader2, Rocket, ShieldCheck, XCircle } from 'lucide-react';
+import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, Loader2, Rocket, ShieldCheck, Stethoscope, XCircle } from 'lucide-react';
 import type { FixoraEvent } from '../api/types';
 
 export type AgentKind = 'developer' | 'tester' | 'reviewer' | 'system';
@@ -28,6 +28,7 @@ function iconFor(event: FixoraEvent) {
     case 'test_result': return event.status === 'passed' ? <CheckCircle2 aria-hidden="true" className="icon" /> : <XCircle aria-hidden="true" className="icon" />;
     case 'llm_call': return <Brain aria-hidden="true" className="icon" />;
     case 'llm_error': return <XCircle aria-hidden="true" className="icon" />;
+    case 'diagnosis': return <Stethoscope aria-hidden="true" className="icon" />;
     default: return <Loader2 aria-hidden="true" className="icon" />;
   }
 }
@@ -44,6 +45,7 @@ function titleFor(event: FixoraEvent): string {
     case 'done': return `Run finished: ${String(event.status || 'done')}`;
     case 'llm_call': return 'Model call completed';
     case 'llm_error': return 'Model call failed';
+    case 'diagnosis': return `Diagnosis: ${String(event.label || event.category || 'unknown')}`;
     default: return event.type.replace(/_/g, ' ');
   }
 }
@@ -53,6 +55,11 @@ function detailFor(event: FixoraEvent): string | null {
   if (typeof event.error === 'string') return event.error;
   if (typeof event.message === 'string' && event.type !== 'step') return event.message;
   if (event.type === 'review_verdict' && typeof event.summary === 'string') return event.summary;
+  if (event.type === 'diagnosis') {
+    const parts = [typeof event.summary === 'string' ? event.summary : ''];
+    if (typeof event.module === 'string') parts.push(`module: ${event.module}`);
+    return parts.filter(Boolean).join(' · ') || null;
+  }
   if (event.type === 'test_result' && Array.isArray(event.failing_tests) && event.failing_tests.length) return `Failing: ${event.failing_tests.join(', ')}`;
   return null;
 }

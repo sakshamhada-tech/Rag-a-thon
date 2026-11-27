@@ -1,13 +1,15 @@
 # Fixora
 
-**From Generative AI to Agentic AI — hackathon project, Phase 3.**
+**From Generative AI to Agentic AI — hackathon project, Phase 4.**
 Fixora is an autonomous coding agent that takes a Python repo plus a task,
 analyses the repo, finds the bug, patches it, runs the real test suite, gets a
 second opinion from a Reviewer agent, and reports the result — from the CLI or
 from a small FastAPI server with live events.
 
-Small and working beats big and half-working: there is still no web UI, no
-vector DB, no embeddings and no PR creation (Phase 3).
+Small and working beats big and half-working: there is still no vector DB, no
+embeddings and no PR creation. Phase 4 adds a failure taxonomy, dependency
+installation and two more demos on top of the Phase 2 agent loop and the
+Phase 3 web UI.
 
 ## How it works
 
@@ -141,7 +143,7 @@ Config safety: `LLM_PROVIDERS` entries are printed as labels only (for example
 `groq1,groq2`); API keys are never printed at startup. Put all explicit entries
 on one physical `.env` line with a non-empty model.
 
-## Phase 3 web UI
+## Web UI
 
 The repository now includes a React + TypeScript + Vite frontend in `frontend/`.
 Tech: React 18, TypeScript, plain CSS with design tokens, self-hosted IBM Plex
@@ -162,7 +164,7 @@ Open `http://127.0.0.1:8000/`. FastAPI serves `frontend/dist` and the API from t
 same origin. `/health`, `/config`, `/demos`, `/runs` and `/runs/{id}/events` back
 the UI. Built-in demos appear in the left panel; GitHub runs still accept only
 public repositories. Demo runs are copied to a temp directory and can only export
-a patch, so approving a demo never mutates `demo_repo/` or `demo_repo_hard/`.
+a patch, so approving a demo never mutates the checked-in fixtures.
 
 ### Frontend development
 
@@ -282,13 +284,59 @@ JSON log in `logs/`.
   tier in `ledgerline/discounts.py`. At baseline: 9 passed, 5 failed. Fixing only
   the obvious rounding bug leaves tier tests failing; the retry loop must fix
   the second bug. 14 tests total once green.
+- `demo_repo_syntax/` ("skylark") — a syntax error (unterminated f-string) blocks
+  import and test collection; the suite cannot run at all at baseline. Fixing the
+  syntax restores the suite.
+- `demo_repo_import/` ("meridian") — an import of the wrong name from an internal
+  module (`stock_level` vs `stock_count`) blocks collection; the fix needs two
+  edits (import line, then the call site), exercising the retry loop.
+
+## Failure taxonomy and dependency errors
+
+Every test run is classified from real pytest output before the agent is asked
+to fix anything (`fixora/diagnostics.py`). The category, label, summary, files,
+module and suggested guidance are injected into the fix prompt, logged to the
+run report (`baseline_diagnosis` / `diagnosis`), emitted as a `diagnosis` event
+for the timeline, and shown on the Inspector's Log tab via raw JSON.
+
+Categories: `syntax_error`, `dependency_missing`, `import_error`,
+`collection_error`, `no_tests`, `assertion_failure`, `runtime_error`,
+`timeout`, `unknown`.
+
+Dependency problems are first-class:
+
+- `dependency_missing` (ModuleNotFoundError) points the fix agent at the
+  `install_dependencies` tool, which installs **only the repo's own declared
+  dependencies** — `requirements.txt` at the root, or `[project] dependencies`
+  from `pyproject.toml` (name/extras/version constraints only; URLs, markers
+  and direct references are rejected). The LLM cannot name packages.
+- Packages are installed into `<sandbox-root>/fixora-deps` — a temp directory
+  next to the copied repo, **never** the host interpreter's environment and
+  never inside the repo copy, so they cannot leak into the diff. pytest then
+  imports them via `PYTHONPATH`. The temp dir is deleted with the run.
+- Disable with `FIXORA_ALLOW_DEPENDENCY_INSTALL=0` (see `.env.example`).
+- If the package is not declared anywhere, the agent is told to either fix the
+  import (typo/internal module) or add it to `requirements.txt` itself, rather
+  than to hallucinate a package name.
+
+Other hardening in the same vein:
+
+- Sandbox subprocesses (pytest, pip) run with a minimal allowlisted environment
+  — host API keys and `FIXORA_API_TOKEN` are not visible to repo code.
+- `PYTHONDONTWRITEBYTECODE=1` plus explicit `__pycache__` invalidation after
+  every `write_file`/`apply_patch`: an in-place edit that keeps file size
+  identical within the same (uint32-truncated) mtime second can no longer test
+  against stale bytecode. A regression test (`tests/test_bytecode_invalidation.py`)
+  pins this.
 
 ## Verify
 
 ```bash
-( cd demo_repo && python -m pytest )      # baseline: 3 failed, 11 passed
-( cd demo_repo_hard && python -m pytest ) # baseline: 5 failed, 9 passed
-python -m pytest tests/                   # unit tests (97 passing)
+( cd demo_repo && python -m pytest )        # baseline: 3 failed, 11 passed
+( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
+( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
+( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
+python -m pytest tests/                   # unit tests (121 passing)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
 
@@ -297,6 +345,8 @@ Offline end-to-end smoke (no keys, no network, `LLM_PROVIDER=mock`):
 ```bash
 LLM_PROVIDER=mock python -m fixora.cli --repo ./demo_repo --task "Fix the failing tests"
 LLM_PROVIDER=mock python -m fixora.cli --repo ./demo_repo_hard --task "Fix the failing tests"
+LLM_PROVIDER=mock python -m fixora.cli --repo ./demo_repo_syntax --task "Fix the failing tests"
+LLM_PROVIDER=mock python -m fixora.cli --repo ./demo_repo_import --task "Fix the failing tests"
 ```
 
 Both runs should reach `awaiting_approval`; adding `--yes` on a copy applies the
@@ -310,7 +360,9 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
   `events.py`, `runner.py`, `cli.py`, `api.py`, `github.py`)
 - `demo_repo/` — swiftcart (Phase 1 fixture)
 - `demo_repo_hard/` — ledgerline (Phase 2 fixture; two related bugs)
-- `frontend/` — Phase 3 React/TypeScript UI
+- `demo_repo_syntax/` — skylark (Phase 4 fixture; syntax error blocks collection)
+- `demo_repo_import/` — meridian (Phase 4 fixture; import error blocks collection)
+- `frontend/` — React/TypeScript UI (built with Vite)
 - `Dockerfile` / `.dockerignore` — single-image API + built UI
 - `tests/` — unit tests for the sandbox, tools, graph routing, caching,
   approval gate, GitHub validation and provider fallback

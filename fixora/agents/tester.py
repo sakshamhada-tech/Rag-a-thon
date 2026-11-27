@@ -25,6 +25,12 @@ def test_node(ctx, state: dict) -> dict:
                 + (f" failing={', '.join(result.get('failing_tests', []))}" if f_ or e else ""))
     ctx.emitter.emit("test_result", **{k: result.get(k) for k in
                                        ("status", "passed", "failed", "errors", "failing_tests")})
+    diagnosis = result.get("diagnosis") or {}
+    if diagnosis:
+        ctx.printer(f"[DIAGNOSIS] {diagnosis.get('label', diagnosis.get('category'))} — "
+                    f"{diagnosis.get('summary', '')}")
+        ctx.emitter.emit("diagnosis", node="test", **{k: diagnosis.get(k) for k in
+                                                     ("category", "label", "summary", "module", "exceptions")})
     if not state.get("baseline_test_result"):
         return {"last_test_result": result, "baseline_test_result": result}
     return {"last_test_result": result}

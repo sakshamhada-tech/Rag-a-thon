@@ -28,6 +28,28 @@ _SKIP_DIRS = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache",
               ".venv", "venv", "node_modules", ".mypy_cache", ".ruff_cache",
               ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".secrets"}
 
+# Subprocesses spawned inside the sandbox get a minimal, allowlisted
+# environment instead of the host's — host API keys/secrets must never be
+# visible to repo code (pytest collects and executes it).
+_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP",
+                    "SYSTEMROOT", "PATHEXT", "COMSPEC",
+                    "SSL_CERT_FILE", "SSL_CERT_DIR",
+                    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+
+
+def _minimal_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {key: os.environ[key] for key in _ENV_PASSTHROUGH if key in os.environ}
+    env.setdefault("PATH", os.defpath)
+    env["PYTHONUNBUFFERED"] = "1"
+    # Never let stale bytecode shadow freshly patched sources: agent edits can
+    # land within the same (uint32-truncated) mtime second as the last pytest
+    # run with identical file size — cpython would then reuse the old .pyc and
+    # test the wrong code.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if extra:
+        env.update(extra)
+    return env
+
 
 class SandboxError(Exception):
     """Raised when a path escapes the workspace or a command is not allowed."""
@@ -98,6 +120,94 @@ class Sandbox:
             raise SandboxError("sensitive env/credential files are not accessible in the sandbox")
         return resolved
 
+    @property
+    def deps_dir(self) -> Path:
+        """Isolated target for sandboxed `pip --target` installs.
+
+        Lives next to (not inside) the copied repo so installed packages never
+        leak into the final diff; removed with the sandbox on cleanup.
+        """
+        target = self.root / "fixora-deps"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def has_installed_deps(self) -> bool:
+        target = self.root / "fixora-deps"
+        try:
+            return any(target.iterdir())
+        except OSError:
+            return False
+
+    def pip_install_specifiers(self, specifiers: list[str], timeout: int = 300) -> CommandResult:
+        """Install declared dependency specifiers (from pyproject [project]).
+
+        Specifiers originate from the repo's own pyproject.toml — never from
+        the model — and are charset-validated before reaching pip. Pure
+        specifier installs run no repo build code.
+        """
+        # PEP 508-shaped, deliberately narrow: name[extras] (op version)* —
+        # no markers, no URLs, no direct references, no environment overriding.
+        name = r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?"
+        version = r"[0-9][0-9A-Za-z.*+!]{0,40}"
+        constraint = rf"(?:==|>=|<=|!=|~=|>|<){version}"
+        safe = re.compile(rf"^{name}(\[[A-Za-z0-9,_-]{{1,64}}\])?({constraint}(,{constraint})*)?$")
+        for spec in specifiers:
+            cleaned = spec.strip()
+            if len(cleaned) > 140 or not safe.match(cleaned):
+                raise SandboxError(f"unsafe dependency specifier: {spec!r}")
+        target = self.deps_dir
+        argv = [sys.executable, "-m", "pip", "install",
+                "--no-input", "--disable-pip-version-check", "--no-cache-dir",
+                "--target", str(target), *[s.strip() for s in specifiers]]
+        try:
+            proc = subprocess.run(argv, cwd=self.workspace, capture_output=True, text=True,
+                                  timeout=timeout, shell=False, env=_minimal_env())
+            return CommandResult(argv=argv[1:], returncode=proc.returncode,
+                                 stdout=_trunc(redact_text(proc.stdout)),
+                                 stderr=_trunc(redact_text(proc.stderr)))
+        except subprocess.TimeoutExpired as e:
+            return CommandResult(argv=argv[1:], returncode=-1,
+                                 stdout=_trunc(redact_text(e.stdout or "")),
+                                 stderr=_trunc(redact_text(e.stderr or "")),
+                                 timed_out=True)
+
+    def pip_install_target(self, requirements_rel: str, timeout: int = 300) -> CommandResult:
+        """Install the repo's own declared requirements into deps_dir.
+
+        Only `-r <file>` installs are allowed — the LLM cannot name packages.
+        The file must live inside the workspace. Runs with a minimal env and
+        no console-script cache; output is redacted and truncated.
+        """
+        req = self.resolve(requirements_rel)
+        if not req.is_file():
+            raise SandboxError(f"not a file: {requirements_rel}")
+        target = self.deps_dir
+        argv = [sys.executable, "-m", "pip", "install",
+                "--no-input", "--disable-pip-version-check", "--no-cache-dir",
+                "--target", str(target), "-r", str(req)]
+        try:
+            proc = subprocess.run(argv, cwd=self.workspace, capture_output=True, text=True,
+                                  timeout=timeout, shell=False, env=_minimal_env())
+            return CommandResult(argv=argv[1:], returncode=proc.returncode,
+                                 stdout=_trunc(redact_text(proc.stdout)),
+                                 stderr=_trunc(redact_text(proc.stderr)))
+        except subprocess.TimeoutExpired as e:
+            return CommandResult(argv=argv[1:], returncode=-1,
+                                 stdout=_trunc(redact_text(e.stdout or "")),
+                                 stderr=_trunc(redact_text(e.stderr or "")),
+                                 timed_out=True)
+
+    def invalidate_bytecode(self) -> int:
+        """Remove __pycache__ dirs from the workspace; returns count removed."""
+        removed = 0
+        for dirpath, dirs, _files in os.walk(self.workspace):
+            for name in list(dirs):
+                if name == "__pycache__":
+                    shutil.rmtree(Path(dirpath) / name, ignore_errors=True)
+                    dirs.remove(name)
+                    removed += 1
+        return removed
+
     def rel(self, resolved: Path) -> str:
         return str(resolved.relative_to(Path(os.path.realpath(self.workspace))))
 
@@ -105,7 +215,8 @@ class Sandbox:
     _ALLOWED_MODULES = {"pytest", "py_compile", "unittest"}
     _ARG_SAFE = re.compile(r"^[\w./:=+\-]+$")
 
-    def run(self, argv: list[str], timeout: int = 60) -> CommandResult:
+    def run(self, argv: list[str], timeout: int = 60,
+            extra_env: dict[str, str] | None = None) -> CommandResult:
         """Run an allowlisted command inside the workspace (no shell)."""
         if not argv or argv[0] != "python":
             raise SandboxError(f"command not allowed (must start with 'python'): {argv!r}")
@@ -125,7 +236,8 @@ class Sandbox:
         try:
             proc = subprocess.run(
                 [sys.executable, *argv[1:]], cwd=self.workspace,
-                capture_output=True, text=True, timeout=timeout, shell=False)
+                capture_output=True, text=True, timeout=timeout, shell=False,
+                env=_minimal_env(extra_env))
             return CommandResult(argv=argv, returncode=proc.returncode,
                                  stdout=_trunc(redact_text(proc.stdout)),
                                  stderr=_trunc(redact_text(proc.stderr)))

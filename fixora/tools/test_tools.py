@@ -4,17 +4,25 @@ never from an LLM's claim about the tests.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from ..config import MAX_OUTPUT_CHARS
+from ..diagnostics import classify_pytest_output
 
 
 def run_tests(sandbox, settings, test_path: str | None = None) -> str:
     argv = ["python", "-m", "pytest", "--tb=short", "-rf", "-q"]
     if test_path:
         argv.append(test_path)
+    extra_env = None
     try:
-        result = sandbox.run(argv, timeout=settings.command_timeout)
+        if sandbox.has_installed_deps():
+            extra_env = {"PYTHONPATH": str(sandbox.deps_dir) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    except Exception:
+        extra_env = None
+    try:
+        result = sandbox.run(argv, timeout=settings.command_timeout, extra_env=extra_env)
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e),
                            "passed": 0, "failed": 0, "errors": 0,
@@ -23,7 +31,11 @@ def run_tests(sandbox, settings, test_path: str | None = None) -> str:
     counts = _parse_counts(out)
     failing = _parse_failing(out)
     status = "timeout" if result.timed_out else ("passed" if result.returncode == 0 else "failed")
-    return json.dumps({
+    diagnosis = None
+    if result.timed_out or result.returncode != 0:
+        diagnosis = classify_pytest_output(out, timed_out=result.timed_out,
+                                           returncode=result.returncode).to_dict()
+    payload = {
         "status": status,
         "passed": counts.get("passed", 0),
         "failed": counts.get("failed", 0),
@@ -31,7 +43,10 @@ def run_tests(sandbox, settings, test_path: str | None = None) -> str:
         "failing_tests": failing,
         "output_tail": out[-MAX_OUTPUT_CHARS:],
         "timed_out": result.timed_out,
-    })
+    }
+    if diagnosis:
+        payload["diagnosis"] = diagnosis
+    return json.dumps(payload)
 
 
 def _parse_counts(output: str) -> dict[str, int]:

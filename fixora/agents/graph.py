@@ -105,6 +105,8 @@ def report_node(ctx: RunContext, state: AgentState) -> dict:
                          ("status", "passed", "failed", "errors", "failing_tests")},
         "tests_after": {k: r.get(k) for k in
                         ("status", "passed", "failed", "errors", "failing_tests")},
+        "baseline_diagnosis": (base.get("diagnosis") or {}).get("label") if base else None,
+        "diagnosis": (r.get("diagnosis") or {}).get("label") if r else None,
         "review": review or None,
         "diff": diff,
         "timings": ctx.timings(),
