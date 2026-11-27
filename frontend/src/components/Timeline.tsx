@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Radio } from 'lucide-react';
+import { ArrowDown, Radio, Wrench } from 'lucide-react';
 import type { DevmateEvent } from '../api/types';
 import { EmptyState } from './EmptyState';
 import { StepRow } from './StepRow';
@@ -94,7 +94,7 @@ export function Timeline({ events, status, sseStatus, error }: Props) {
                 return (
                   <div className="event-row" key={item.key}>
                     <div className="event-time">{item.event.ts}</div>
-                    <span className="agent-marker agent-system" aria-hidden="true"><span className="mono" style={{ fontSize: 10 }}>tool</span></span>
+                    <span className="agent-marker agent-system" aria-hidden="true" title="Tool call"><Wrench className="icon" /></span>
                     <div className="event-body"><ToolCallRow call={item.event} result={item.result} /></div>
                     <div className="event-actions" />
                   </div>

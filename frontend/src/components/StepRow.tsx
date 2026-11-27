@@ -65,7 +65,7 @@ export function StepRow({ event }: { event: DevmateEvent }) {
       <div className="event-time">{event.ts}</div>
       <AgentMarker agent={agent} />
       <div className="event-body">
-        <div className="event-title">{iconFor(event)} <span style={{ verticalAlign: '2px', marginLeft: 6 }}>{titleFor(event)}</span></div>
+        <div className="event-title"><span className="event-title-icon" aria-hidden="true">{iconFor(event)}</span><span className="event-title-text">{titleFor(event)}</span></div>
         {detailFor(event) && <div className="event-detail">{detailFor(event)}</div>}
       </div>
       <div className="event-actions mono">{ms}</div>
