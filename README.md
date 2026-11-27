@@ -25,7 +25,7 @@ baseline test → analyse → plan → fix ⇄ test → report
   `write_file`, `apply_patch` (exact match, must be unique), `run_tests`
   (real pytest output — never the LLM's claim).
 - **LLM**: provider-agnostic wrapper with native tool calling.
-  `LLM_PROVIDER=anthropic` or `openai`, keys/models from `.env`.
+  `LLM_PROVIDER=xai` (Grok), `anthropic` or `openai`; keys/models from `.env`.
 - The full run (steps, tool calls, results) is logged to `logs/<timestamp>.json`.
 
 ## Setup
@@ -44,6 +44,24 @@ python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
 ```
 
 Exit code is `0` if the tests pass at the end, else `1`.
+
+### Use Grok (xAI)
+
+```bash
+# .env
+LLM_PROVIDER=xai
+XAI_API_KEY=xai-your-real-key-here
+XAI_MODEL=grok-4-latest        # or the exact Grok model enabled for your account
+XAI_BASE_URL=https://api.x.ai/v1
+```
+
+Then run:
+
+```bash
+python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
+```
+
+`.env` is gitignored; never commit your Grok key.
 
 ### Example output (abridged, offline smoke run)
 

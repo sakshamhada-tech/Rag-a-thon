@@ -20,6 +20,9 @@ class Settings:
     anthropic_model: str
     openai_api_key: str | None
     openai_model: str
+    xai_api_key: str | None
+    xai_model: str
+    xai_base_url: str
     max_attempts: int
     command_timeout: int
     max_tool_steps: int
@@ -34,6 +37,10 @@ def load_settings() -> Settings:
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        xai_api_key=(os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY")) or None,
+        # Set XAI_MODEL to the exact Grok model enabled for your xAI account.
+        xai_model=os.getenv("XAI_MODEL", "grok-4-latest"),
+        xai_base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
         max_attempts=int(os.getenv("MAX_ATTEMPTS", "3")),
         command_timeout=int(os.getenv("COMMAND_TIMEOUT", "60")),
         max_tool_steps=int(os.getenv("MAX_TOOL_STEPS", "12")),

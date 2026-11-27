@@ -80,7 +80,7 @@ agent must fix the source.
       `write_file`, `apply_patch` (unique-anchor), `run_tests` (parsed output)
 - [x] LangGraph loop: baseline → analyse → plan → fix → test → decide → report,
       with retry on failing tests and `max_attempts` budget
-- [x] Provider-agnostic LLM wrapper (Anthropic + OpenAI) with native tool calling
+- [x] Provider-agnostic LLM wrapper (Anthropic + OpenAI + Grok/xAI) with native tool calling
 - [x] CLI with live step printing, JSON run logs, exit code 0/1
 - [x] Demo repo with one planted bug, 3 failing tests (verified at baseline)
 - [x] Unit tests: sandbox path-escape/symlinks/allowlist, apply_patch
@@ -95,11 +95,12 @@ agent must fix the source.
 
 ### Known limitations / not yet verified
 - **No real LLM run has been performed in this environment** — the sandbox has
-  no API keys and no network route to `api.anthropic.com` / `api.openai.com`
-  (verified: connection failure; PyPI reachable). The mock provider proves the
-  plumbing (sandbox, tools, graph, retry routing, logs, exit codes), NOT that an
-  LLM can solve novel bugs. First real run must use `LLM_PROVIDER=anthropic|openai`
-  with a valid key.
+  no API keys and no verified network route to `api.anthropic.com` /
+  `api.openai.com` / `api.x.ai` in this environment (Anthropic/OpenAI were
+  verified unreachable; PyPI reachable). The mock provider proves the plumbing
+  (sandbox, tools, graph routing, logs, exit codes), NOT that an LLM can solve
+  novel bugs. First real run must use `LLM_PROVIDER=xai|anthropic|openai` with
+  a valid key in `.env`.
 - Retry loop is exercised by construction (`decide` unit tests) but has not been
   observed to recover from a failed first attempt with a real model.
 - `run_tests` parses counts with regexes against pytest's summary line; exotic

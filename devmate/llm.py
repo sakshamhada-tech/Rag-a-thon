@@ -1,8 +1,9 @@
 """Provider-agnostic LLM client with native tool/function calling.
 
-Supports Anthropic and OpenAI via LLM_PROVIDER. Also provides a deterministic
-offline provider `mock` used ONLY to smoke-test the agent pipeline without
-network access — it does no real reasoning and must not be used in production.
+Supports Anthropic, OpenAI and Grok/xAI (OpenAI-compatible API) via
+LLM_PROVIDER. Also provides a deterministic offline provider `mock` used ONLY
+to smoke-test the agent pipeline without network access — it does no real
+reasoning and must not be used in production.
 
 Internal message format (neutral dicts, OpenAI-flavoured):
   {"role": "system"|"user", "content": str}
@@ -95,12 +96,14 @@ class AnthropicClient:
 # ------------------------------------------------------------------ OpenAI
 
 class OpenAIClient:
-    def __init__(self, api_key: str | None, model: str):
+    def __init__(self, api_key: str | None, model: str, *, base_url: str | None = None,
+                 provider_label: str = "openai", key_hint: str = "OPENAI_API_KEY"):
         if not api_key:
-            raise LLMError("LLM_PROVIDER=openai but OPENAI_API_KEY is not set (see .env.example)")
+            raise LLMError(f"LLM_PROVIDER={provider_label} but {key_hint} is not set (see .env.example)")
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
         self.model = model
+        self.provider_label = provider_label
 
     def chat(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
         oai: list[dict] = []
@@ -128,7 +131,7 @@ class OpenAIClient:
         try:
             resp = self.client.chat.completions.create(**kwargs)
         except Exception as e:
-            raise LLMError(f"OpenAI API error: {e}") from e
+            raise LLMError(f"{self.provider_label} API error: {e}") from e
         msg = resp.choices[0].message
         calls = [ToolCall(id=tc.id, name=tc.function.name,
                           arguments=json.loads(tc.function.arguments or "{}"))
@@ -230,6 +233,11 @@ def get_llm(settings):
         return AnthropicClient(settings.anthropic_api_key, settings.anthropic_model)
     if provider == "openai":
         return OpenAIClient(settings.openai_api_key, settings.openai_model)
+    if provider in ("xai", "grok", "grok-api"):
+        # xAI exposes an OpenAI-compatible chat-completions API.
+        return OpenAIClient(settings.xai_api_key, settings.xai_model,
+                            base_url=settings.xai_base_url,
+                            provider_label="xai", key_hint="XAI_API_KEY")
     if provider == "mock":
         return MockClient()
-    raise LLMError(f"Unknown LLM_PROVIDER={provider!r} (expected 'anthropic', 'openai' or 'mock')")
+    raise LLMError(f"Unknown LLM_PROVIDER={provider!r} (expected 'anthropic', 'openai', 'xai' or 'mock')")
