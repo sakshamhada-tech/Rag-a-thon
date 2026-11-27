@@ -59,7 +59,8 @@ replacement and fails unless `old_str` occurs exactly once.
 calling. `AnthropicClient` (messages API + `tool_use` blocks), `OpenAIClient`
 (chat.completions + `tools`), Grok/xAI and Groq Cloud (both via `OpenAIClient`
 with `XAI_BASE_URL` / `GROQ_BASE_URL`) selected by `LLM_PROVIDER`; model/keys
-from `.env`. `MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline
+from `.env`. Response parsing tolerates dict- or object-style SDK payloads
+(Groq returns tool-call objects that are not always SDK-typed). `MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline
 provider for pipeline smoke tests only — no LLM, no reasoning.
 `python -m devmate.cli --list-models` lists model IDs visible to the configured
 key (OpenAI-compatible providers and Anthropic) so you can fix `GROQ_MODEL`
@@ -89,14 +90,14 @@ agent must fix the source.
 - [x] CLI with live step printing, JSON run logs, exit code 0/1
 - [x] Demo repo with one planted bug, 3 failing tests (verified at baseline)
 - [x] Unit tests: sandbox path-escape/symlinks/allowlist, apply_patch
-      uniqueness, decide() routing, pytest-output parsing (37 tests, all pass)
+      uniqueness, decide() routing, pytest-output parsing (44 tests, all pass)
 - [x] End-to-end CLI run verified (offline mock provider; see note below)
 
 ### Verified evidence
 - Baseline: `3 failed, 11 passed` in `demo_repo` (before any edit).
 - End-to-end (offline `mock` provider): baseline fail → patch `money.py`
   → `14 passed` → exit 0; original repo untouched (diff applied to temp copy).
-- Unit suite: `37 passed`.
+- Unit suite: `44 passed`.
 
 ### Known limitations / not yet verified
 - **No successful real LLM run yet** — the maintainer's free-tier Groq run

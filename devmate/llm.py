@@ -41,6 +41,61 @@ def _truncate(s: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     return s if len(s) <= limit else s[:limit] + f"\n...[truncated {len(s) - limit} chars]"
 
 
+def _get(obj, key, default=None):
+    """Tolerate dict-style and object-style payloads (Groq/OpenAI-compatible SDKs)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _parse_tool_arguments(raw, tool_name: str = "") -> dict:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return {"_raw_arguments": str(raw)}
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # Let the tool return a structured error instead of crashing the run.
+        return {"_raw_arguments": raw, "_json_error": f"invalid JSON arguments for {tool_name or 'tool'}"}
+    return parsed if isinstance(parsed, dict) else {"_raw_arguments": parsed}
+
+
+def _parse_anthropic_response(resp) -> LLMResponse:
+    text, calls = "", []
+    for block in _get(resp, "content", []) or []:
+        btype = _get(block, "type")
+        if btype == "text":
+            text += _get(block, "text", "") or ""
+        elif btype == "tool_use":
+            calls.append(ToolCall(id=str(_get(block, "id", "")),
+                                  name=str(_get(block, "name", "")),
+                                  arguments=_parse_tool_arguments(_get(block, "input", {}), str(_get(block, "name", "tool")))))
+    return LLMResponse(text=text, tool_calls=calls)
+
+
+def _parse_openai_response(resp) -> LLMResponse:
+    choices = _get(resp, "choices", []) or []
+    if not choices:
+        raise LLMError("empty choices in response")
+    msg = _get(choices[0], "message", {}) or {}
+    text = _get(msg, "content", "") or ""
+    calls = []
+    for i, tc in enumerate(_get(msg, "tool_calls", None) or []):
+        fn = _get(tc, "function", {}) or {}
+        name = str(_get(fn, "name", ""))
+        calls.append(ToolCall(id=str(_get(tc, "id", f"call_{i}")),
+                              name=name,
+                              arguments=_parse_tool_arguments(_get(fn, "arguments", {}), name)))
+    return LLMResponse(text=text, tool_calls=calls)
+
 # ---------------------------------------------------------------- Anthropic
 
 class AnthropicClient:
@@ -83,14 +138,7 @@ class AnthropicClient:
             resp = self.client.messages.create(**kwargs)
         except Exception as e:  # SDK raises several subclasses; normalise
             raise LLMError(f"Anthropic API error: {e}") from e
-        text, calls = "", []
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                text += block.text
-            elif getattr(block, "type", None) == "tool_use":
-                calls.append(ToolCall(id=block.id, name=block.name,
-                                      arguments=dict(block.input or {})))
-        return LLMResponse(text=text, tool_calls=calls)
+        return _parse_anthropic_response(resp)
 
 
 # ------------------------------------------------------------------ OpenAI
@@ -134,11 +182,7 @@ class OpenAIClient:
             resp = self.client.chat.completions.create(**kwargs)
         except Exception as e:
             raise LLMError(f"{self.provider_label} API error: {e}") from e
-        msg = resp.choices[0].message
-        calls = [ToolCall(id=tc.id, name=tc.function.name,
-                          arguments=json.loads(tc.function.arguments or "{}"))
-                 for tc in (msg.tool_calls or [])]
-        return LLMResponse(text=msg.content or "", tool_calls=calls)
+        return _parse_openai_response(resp)
 
 
 # -------------------------------------------------------------------- Mock
@@ -263,7 +307,7 @@ def list_available_models(settings) -> list[str]:
                 raise LLMError("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
             from anthropic import Anthropic
             resp = Anthropic(api_key=settings.anthropic_api_key).models.list()
-            return sorted(m.id for m in resp.data)
+            return sorted(str(_get(m, "id", "")) for m in (_get(resp, "data", []) or []))
         if provider in ("openai", "xai", "grok", "grok-api", "groq"):
             if provider == "openai":
                 key, base_url = settings.openai_api_key, None
@@ -276,7 +320,7 @@ def list_available_models(settings) -> list[str]:
                 raise LLMError(f"LLM_PROVIDER={provider} but {key_env} is not set")
             from openai import OpenAI
             resp = OpenAI(api_key=key, base_url=base_url, max_retries=0).models.list()
-            return sorted(m.id for m in resp.data)
+            return sorted(str(_get(m, "id", "")) for m in (_get(resp, "data", []) or []))
         raise LLMError(f"Unknown LLM_PROVIDER={provider!r}")
     except LLMError:
         raise
