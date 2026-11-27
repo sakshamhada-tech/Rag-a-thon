@@ -37,7 +37,9 @@ _PHASE_DETAILS = {
             ["read_file", "search_code", "list_tree", "get_dependencies",
              "write_file", "apply_patch"]),
     "review": ("You are the Reviewer. Inspect changed files with read-only tools if needed. "
-               "Output STRICT JSON only — no markdown, no prose outside the JSON — matching: "
+               "Never call tools named json, commentary, output_final or similar pseudo-tools; "
+               "if no read-only tool is needed, reply directly with the JSON object. Output "
+               "STRICT JSON only — no markdown, no prose outside the JSON — matching: "
                '{"verdict": "approve"|"reject", "issues": ["..."], "risk": "low"|"medium"|"high", '
                '"summary": "..."}. Check for a root-cause fix vs hack, weakened/deleted tests, '
                "unrelated changes and possible regressions. If anything is off, verdict must be reject.",
@@ -74,8 +76,10 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
                 correction = (
                     f"The provider rejected a tool call: {e}\n"
                     f"Only these tools exist in this phase: {allowed_list}. "
-                    "Do not call any other tool. If you meant to edit code, stop and "
-                    "describe the edit instead of calling it now.")
+                    "Do not call any other tool — 'json', 'commentary', 'output_final' "
+                    "and similar pseudo-tools are not tools. If you meant to emit JSON, "
+                    "write the JSON object as your reply text. "
+                    "If you meant to edit code, describe the edit instead of calling it now.")
                 ctx.printer(f"[ERROR] {phase} tool-call rejected; retrying with correction "
                             f"({validation_retries}/2)")
                 ctx.log_step(phase, "unavailable tool call rejected by provider", error=str(e))

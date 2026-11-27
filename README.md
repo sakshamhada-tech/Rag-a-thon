@@ -37,8 +37,11 @@ anywhere.
   tool + args) in one run are served from a cache and marked `[CACHED]`; any
   successful mutation invalidates the cache. Tool-argument errors are returned
   as `{"error": ...}` data so the model can correct itself.
-- **Reviewer**: a separate LangGraph node runs after a passing test run with
-  the task, plan, unified diff and test results. It has read-only tools and
+- **Reviewer**: a separate LangGraph node runs after a passing test run with the
+  task, plan, unified diff and test results. It has read-only tools; if your
+  provider rejects that tool-enabled pass because the model emits pseudo-tools,
+  DevMate retries the verdict with no tools exposed (still never auto-approves
+  without a human). Otherwise it
   must emit strict JSON (`verdict`, `issues`, `risk`, `summary`). A rejection
   routes back to `fix` with reviewer issues in context and counts toward
   `MAX_ATTEMPTS`. A hard code rule flags diffs under `tests/` and forces

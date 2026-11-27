@@ -53,7 +53,10 @@ python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
    Checks root cause vs hack, weakened/deleted tests, unrelated changes,
    regressions. **Hard code rule**: a diff touching `tests/` is flagged; if
    assertions/test functions were removed or loosened, the reviewer is forced
-   to reject regardless of LLM output.
+   to reject regardless of LLM output. If a provider rejects the tool-enabled
+   reviewer pass because the model emits pseudo-tools such as `json` or
+   `commentary`, the node retries the verdict with no tools exposed and the
+   diff in the prompt; the attempt is marked `fallback_used` in the review.
 7. `report` — `awaiting_approval` when tests pass AND reviewer approves;
    otherwise `failed`. The report carries before/after test counts, attempts,
    edits, diff, review, timings (LLM duration, tool duration, cached hits,
@@ -145,7 +148,8 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - [x] `demo_repo_hard/` fixture (two related bugs across two modules)
 - [x] Unit tests: aliases, argument validation, caching, mutation invalidation,
       approval gate (no write before approve; approve writes), GitHub URL
-      validator, provider fallback, patch export — 77 tests, all pass
+      validator, provider fallback, patch export, reviewer pseudo-tool fallback —
+      79 tests, all pass
 - [x] Offline end-to-end CLI (`LLM_PROVIDER=mock`) verified on `demo_repo` and
       `demo_repo_hard` (reaches `awaiting_approval`; two-bug retry observed on
       `demo_repo_hard`, logs in `logs/`)
@@ -157,7 +161,12 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `77 passed`.
+- Unit suite: `79 passed`.
+- Maintainer local Groq run on `demo_repo_hard` (2026-11-28, prompt supplied by
+  maintainer): both bugs were fixed and tests reached `14 passed`, but the
+  reviewer failed because Groq rejected pseudo-tool calls (`json`,
+  `commentary`). This exposed a reviewer robustness bug, fixed by the
+  verdict-only fallback above; that fallback still requires human approval.
 - FastAPI process verified locally: `POST /runs` with a local path returns 400;
   public GitHub URL returns 202 and streams SSE events replaying the run;
   local approval covered by unit tests.
@@ -165,11 +174,11 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 ### Known limitations / honestly not verified
 - **No Phase 2 real-LLM run in this sandbox** — there is no `.env`/API key here
   and provider reachability (e.g. `api.groq.com`) was not exercised. The
-  Phase 1 Groq path was verified by the maintainer on 2026-11-27 (log
-  `logs/20261127-235747.json`, provider `groq`, model `openai/gpt-oss-120b`,
-  14 passed after one edit). Phase 2 with a real provider (reviewer +
-  reasoning_effort + fallback chain) has not been run; treat reviewer quality
-  and retry recovery with real models as unproven.
+  maintainer ran Phase 2 locally on 2026-11-28 against Groq for
+  `demo_repo_hard`; the model fixed both bugs and reached `14 passed`, but the
+  reviewer aborted on Groq-side tool-call validation for pseudo-tools. The
+  reviewer fallback added afterwards is unit-tested only; a fresh real-provider
+  run is required to claim the whole path is green.
 - GitHub end-to-end in the sandbox cloned the public `Rag-a-thon` repo and
   streamed events successfully; the root pytest suite collected the
   sub-project `demo_repo/tests`, which fails to import (`swiftcart` lives

@@ -258,3 +258,57 @@ def test_fallback_does_not_mask_non_retryable_errors():
     client = FallbackLLMClient([_BadRequest(), _Healthy()])
     with pytest.raises(LLMError, match="400"):
         client.chat([{"role": "user", "content": "hi"}], [])
+
+
+class _PseudoToolReviewer:
+    provider_label = "pseudo-tool"
+    supports_reasoning = False
+
+    def chat(self, messages, tools, reasoning_effort=None):
+        if tools:
+            raise LLMError("400 tool call validation failed: attempted to call tool "
+                           "'json' which was not in request.tools")
+        return LLMResponse(text='{"verdict":"approve","issues":[],"risk":"low",'
+                                ' "summary":"minimal fix"}', tool_calls=[])
+
+
+class _ToolInVerdictMode:
+    provider_label = "tool-in-verdict"
+    supports_reasoning = False
+
+    def chat(self, messages, tools, reasoning_effort=None):
+        if tools:
+            raise LLMError("400 attempted to call tool 'commentary' which was not in request.tools")
+        return LLMResponse(text='{"verdict":"approve","issues":[],"risk":"low","summary":"ok"}',
+                           tool_calls=[__import__("devmate.llm", fromlist=["ToolCall"]).ToolCall(
+                               id="x", name="json", arguments={})])
+
+
+def test_review_verdict_only_fallback_approves_when_tools_are_hallucinated(tmp_path):
+    from devmate.agents.reviewer import review_node
+
+    sandbox, ctx = _sandbox_with_settings(tmp_path)
+    try:
+        ctx.llm = _PseudoToolReviewer()
+        state = {"task": "Fix", "plan": "P", "last_test_result": {"passed": 14, "failed": 0},
+                 "messages": []}
+        result = review_node(ctx, state)
+        assert result["review"]["verdict"] == "approve"
+        assert result["review"]["fallback_used"] is True
+    finally:
+        sandbox.cleanup()
+
+
+def test_verdict_only_mode_does_not_trust_tool_calls_for_approval(tmp_path):
+    from devmate.agents.reviewer import review_node
+
+    sandbox, ctx = _sandbox_with_settings(tmp_path)
+    try:
+        ctx.llm = _ToolInVerdictMode()
+        state = {"task": "Fix", "plan": "P", "last_test_result": {"passed": 14, "failed": 0},
+                 "messages": []}
+        result = review_node(ctx, state)
+        assert result["review"]["verdict"] == "reject"
+        assert result["review"]["risk"] == "high"
+    finally:
+        sandbox.cleanup()

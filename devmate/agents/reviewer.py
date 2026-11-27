@@ -41,17 +41,31 @@ def review_node(ctx, state: dict) -> dict:
         "Do not re-read files you already have.")
     try:
         text, msgs = run_developer(ctx, "review", state, instruction, reasoning_effort="medium")
-    except LLMError as e:
-        # Reviewer unavailable: do not auto-approve consequential changes.
-        review = {"verdict": "reject",
-                  "issues": [f"reviewer unavailable: {e}"],
-                  "risk": "high",
-                  "summary": "Reviewer failed; refusing to auto-approve. Fix and re-review."}
-        ctx.printer(f"[REVIEW] verdict=reject (reviewer error: {e})")
+    except LLMError as inspection_error:
+        ctx.printer(f"[REVIEW] tool-enabled pass failed; retrying verdict-only "
+                    f"(provider issue: {inspection_error})")
+        ctx.log_step("review", "tool-enabled review failed; verdict-only fallback",
+                     error=str(inspection_error))
+        review, fallback_msgs = _review_without_tools(ctx, state, diff, inspection_error)
+        if review is None:
+            review = {"verdict": "reject",
+                      "issues": [f"reviewer unavailable: {inspection_error}"],
+                      "risk": "high",
+                      "summary": "Reviewer could not produce a verdict; refusing to auto-approve."}
+            ctx.printer(f"[REVIEW] verdict=reject (reviewer error: {inspection_error})")
+            ctx.emitter.emit("review_verdict", **review)
+            return {"review": review, "diff": diff,
+                    "messages": state.get("messages", []) + [_issue_message(review)]}
+        ctx.printer(f"[REVIEW] verdict={review['verdict']} risk={review['risk']} "
+                    f"issues={len(review['issues'])} (verdict-only)")
         ctx.emitter.emit("review_verdict", **review)
-        ctx.log_step("review", "reviewer error", error=str(e))
-        return {"review": review, "diff": diff,
-                "messages": state.get("messages", []) + [_issue_message(review)]}
+        ctx.log_step("review", f"verdict={review['verdict']} (verdict-only)",
+                     verdict=review["verdict"], risk=review["risk"],
+                     issues=review["issues"], fallback_used=True)
+        messages = list(state.get("messages", [])) + fallback_msgs
+        if review["verdict"] == "reject":
+            messages.append(_issue_message(review))
+        return {"review": review, "diff": diff, "messages": messages}
 
     review = _parse_review(text)
     ctx.printer(f"[REVIEW] verdict={review['verdict']} risk={review['risk']} "
@@ -63,6 +77,54 @@ def review_node(ctx, state: dict) -> dict:
     if review["verdict"] == "reject":
         messages.append(_issue_message(review))
     return {"review": review, "diff": diff, "messages": messages}
+
+
+def _review_without_tools(ctx, state: dict, diff: str, inspection_error: Exception):
+    """Ask the model for the verdict only.
+
+    Some OpenAI-compatible providers reject a reviewer turn when the model emits
+    a pseudo-tool such as "json" or "commentary". The verdict does not need
+    tools: the full diff, task, plan and test result are in the prompt. This is
+    a verdict attempt, not an approval bypass — it still lands on the human
+    approval gate.
+    """
+    instruction = (
+        f"Task: {state['task']}\n\nPlan:\n{state.get('plan', '')}\n\n"
+        f"Last test result: passed={state.get('last_test_result', {}).get('passed')} "
+        f"failed={state.get('last_test_result', {}).get('failed')}\n\n"
+        f"Unified diff to review:\n```diff\n{diff}\n```\n\n"
+        f"A tool-enabled review pass failed with: {inspection_error}\n"
+        "Answer from the diff alone. Do not call tools of any kind. Output strict "
+        "JSON only, with no markdown fences and no prose outside the JSON object.")
+    messages = [
+        {"role": "system", "content":
+         "PHASE: review\nYou are DevMate's Reviewer agent. Output STRICT JSON only — "
+         "no tools, no markdown, no extra prose — matching exactly "
+         '{"verdict": "approve"|"reject", "issues": ["..."], "risk": "low"|"medium"|"high", '
+         '"summary": "..."}. Check for a root-cause fix vs hack, weakened/deleted tests, '
+         "unrelated changes and possible regressions. If anything is off, verdict must be reject."},
+        {"role": "user", "content": instruction},
+    ]
+    try:
+        resp, _ = ctx.timed_llm(lambda: ctx.llm.chat(messages, [],
+                                                     reasoning_effort="medium"))
+    except LLMError:
+        return None, []
+    assistant_msg = {"role": "assistant", "content": resp.text}
+    if resp.tool_calls:
+        assistant_msg["tool_calls"] = [
+            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+            for tc in resp.tool_calls]
+    review = _parse_review(resp.text)
+    review["fallback_used"] = True
+    if resp.tool_calls and review["verdict"] == "approve":
+        # A model that tries tools in verdict-only mode is not trusted to approve.
+        review = {**review,
+                  "verdict": "reject",
+                  "risk": "high",
+                  "issues": ["reviewer attempted a tool during verdict-only mode"] + review["issues"],
+                  "summary": "Verdict-only review produced tool calls; refusing to auto-approve."}
+    return review, messages + [assistant_msg]
 
 
 # ------------------------------------------------------------------- internals
