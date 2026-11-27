@@ -49,9 +49,11 @@ def run_developer(ctx, phase: str, state: dict, instruction: str) -> tuple[str, 
         try:
             resp = ctx.llm.chat(new_messages, schemas)
         except LLMError as e:
-            final_text = f"[LLM error] {e}"
-            ctx.log_step(phase, final_text)
-            break
+            # Fatal for this run (bad key/model/base URL): stop instead of
+            # retrying the same failing call across all attempts.
+            ctx.printer(f"[ERROR] {phase} failed: {e}")
+            ctx.log_step(phase, f"llm error: {e}")
+            raise
         assistant_msg = {"role": "assistant", "content": resp.text}
         if resp.tool_calls:
             assistant_msg["tool_calls"] = [

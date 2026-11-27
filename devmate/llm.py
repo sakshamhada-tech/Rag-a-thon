@@ -250,3 +250,35 @@ def get_llm(settings):
     if provider == "mock":
         return MockClient()
     raise LLMError(f"Unknown LLM_PROVIDER={provider!r} (expected 'anthropic', 'openai', 'xai', 'groq' or 'mock')")
+
+
+def list_available_models(settings) -> list[str]:
+    """List model IDs visible to the configured provider key (no inference)."""
+    provider = settings.llm_provider
+    if provider == "mock":
+        return ["mock (offline)"]
+    try:
+        if provider == "anthropic":
+            if not settings.anthropic_api_key:
+                raise LLMError("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
+            from anthropic import Anthropic
+            resp = Anthropic(api_key=settings.anthropic_api_key).models.list()
+            return sorted(m.id for m in resp.data)
+        if provider in ("openai", "xai", "grok", "grok-api", "groq"):
+            if provider == "openai":
+                key, base_url = settings.openai_api_key, None
+            elif provider in ("xai", "grok", "grok-api"):
+                key, base_url = settings.xai_api_key, settings.xai_base_url
+            else:
+                key, base_url = settings.groq_api_key, settings.groq_base_url
+            if not key:
+                key_env = {"openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY"}.get(provider, "XAI_API_KEY")
+                raise LLMError(f"LLM_PROVIDER={provider} but {key_env} is not set")
+            from openai import OpenAI
+            resp = OpenAI(api_key=key, base_url=base_url, max_retries=0).models.list()
+            return sorted(m.id for m in resp.data)
+        raise LLMError(f"Unknown LLM_PROVIDER={provider!r}")
+    except LLMError:
+        raise
+    except Exception as e:
+        raise LLMError(f"could not list models for provider {provider}: {e}") from e

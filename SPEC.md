@@ -61,6 +61,10 @@ calling. `AnthropicClient` (messages API + `tool_use` blocks), `OpenAIClient`
 with `XAI_BASE_URL` / `GROQ_BASE_URL`) selected by `LLM_PROVIDER`; model/keys
 from `.env`. `MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline
 provider for pipeline smoke tests only — no LLM, no reasoning.
+`python -m devmate.cli --list-models` lists model IDs visible to the configured
+key (OpenAI-compatible providers and Anthropic) so you can fix `GROQ_MODEL`
+when Groq retires/free-tier-blocks a model. Fatal LLM errors (bad key/model)
+abort the run instead of retrying all attempts with no edits.
 
 **Demo repo** (`demo_repo/`, "swiftcart"): shopping-cart / bulk-discount
 calculator, stdlib-only, 14 tests. Exactly 3 tests fail on one planted logic
@@ -85,23 +89,23 @@ agent must fix the source.
 - [x] CLI with live step printing, JSON run logs, exit code 0/1
 - [x] Demo repo with one planted bug, 3 failing tests (verified at baseline)
 - [x] Unit tests: sandbox path-escape/symlinks/allowlist, apply_patch
-      uniqueness, decide() routing, pytest-output parsing (30 tests, all pass)
+      uniqueness, decide() routing, pytest-output parsing (37 tests, all pass)
 - [x] End-to-end CLI run verified (offline mock provider; see note below)
 
 ### Verified evidence
 - Baseline: `3 failed, 11 passed` in `demo_repo` (before any edit).
 - End-to-end (offline `mock` provider): baseline fail → patch `money.py`
   → `14 passed` → exit 0; original repo untouched (diff applied to temp copy).
-- Unit suite: `30 passed`.
+- Unit suite: `37 passed`.
 
 ### Known limitations / not yet verified
-- **No real LLM run has been performed in this environment** — the sandbox has
-  no API keys and no verified network route to `api.anthropic.com` /
-  `api.openai.com` / `api.x.ai` in this environment (Anthropic/OpenAI were
-  verified unreachable; PyPI reachable). The mock provider proves the plumbing
-  (sandbox, tools, graph routing, logs, exit codes), NOT that an LLM can solve
-  novel bugs. First real run must use `LLM_PROVIDER=groq|xai|anthropic|openai`
-  with a valid key in `.env`.
+- **No successful real LLM run yet** — the maintainer's free-tier Groq run
+  failed fast on a 404 because `llama-3.3-70b-versatile` was retired for
+  free/developer tiers on 2026-08-16. Default is now `openai/gpt-oss-120b`;
+  run `--list-models` to pick a visible tool-calling model for your key. The
+  offline mock provider proves the plumbing (sandbox, tools, graph routing,
+  logs, exit codes), NOT that an LLM can solve novel bugs. First real run must
+  use `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 - Retry loop is exercised by construction (`decide` unit tests) but has not been
   observed to recover from a failed first attempt with a real model.
 - `run_tests` parses counts with regexes against pytest's summary line; exotic

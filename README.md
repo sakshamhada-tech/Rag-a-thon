@@ -53,10 +53,16 @@ Groq (`groq.com`) is **not** the same as xAI Grok. Its API is OpenAI-compatible.
 # .env
 LLM_PROVIDER=groq
 GROQ_API_KEY=gsk-your-free-tier-key-here
-GROQ_MODEL=llama-3.3-70b-versatile   # must be a tool-calling model enabled for your account
+GROQ_MODEL=openai/gpt-oss-120b   # llama-3.3-70b-versatile was retired for free/dev tiers on 2026-08-16
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 # Optional: lower this if the free tier rate-limits you
 MAX_TOOL_STEPS=8
+```
+
+If you're unsure which models your key can access:
+
+```bash
+python -m devmate.cli --list-models
 ```
 
 Then run:
@@ -65,7 +71,7 @@ Then run:
 python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
 ```
 
-Free-tier notes: requests are rate-limited per minute; the client uses extra SDK retries, but sustained 429s will surface as `[LLM error] groq API error: ...` inside the run. Pick a currently enabled tool-calling model from your Groq console if the default is unavailable. `.env` is gitignored; never commit your key.
+Free-tier notes: requests are rate-limited per minute; the client uses extra SDK retries, but sustained 429s will abort the run with `[ERROR] groq API error: ...`. If you see `404 - The model ... does not exist`, run `python -m devmate.cli --list-models` and set `GROQ_MODEL` to a visible tool-calling model. `llama-3.3-70b-versatile` / `llama-3.1-8b-instant` were shut down for free/developer tiers on 2026-08-16 ([Groq deprecations](https://console.groq.com/docs/deprecations)); Groq recommends `openai/gpt-oss-120b` or `openai/gpt-oss-20b`. `.env` is gitignored; never commit your key.
 
 ### Use Grok (xAI)
 

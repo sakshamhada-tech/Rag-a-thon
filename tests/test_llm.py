@@ -2,7 +2,7 @@
 import pytest
 
 from devmate.config import Settings
-from devmate.llm import LLMError, MockClient, OpenAIClient, get_llm
+from devmate.llm import LLMError, MockClient, OpenAIClient, get_llm, list_available_models
 
 
 def _settings(provider: str, **overrides) -> Settings:
@@ -16,7 +16,7 @@ def _settings(provider: str, **overrides) -> Settings:
         xai_model="grok-4-latest",
         xai_base_url="https://api.x.ai/v1",
         groq_api_key=None,
-        groq_model="llama-3.3-70b-versatile",
+        groq_model="openai/gpt-oss-120b",
         groq_base_url="https://api.groq.com/openai/v1",
         max_attempts=3,
         command_timeout=60,
@@ -60,3 +60,7 @@ def test_groq_selects_openai_compatible_client():
     assert isinstance(client, OpenAIClient)
     assert client.model == "test-tool-model"
     assert client.provider_label == "groq"
+
+
+def test_list_available_models_mock():
+    assert list_available_models(_settings("mock")) == ["mock (offline)"]

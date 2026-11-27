@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from .config import load_settings
-from .llm import get_llm, LLMError
+from .llm import get_llm, list_available_models, LLMError
 from .sandbox import Sandbox, SandboxError
 from .tools import build_tools
 from .agents.common import RunContext
@@ -23,13 +23,28 @@ from .agents.graph import build_graph, initial_state
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="DevMate Phase 1 — autonomous fix agent")
-    parser.add_argument("--repo", required=True, help="Path to the target Python repo")
-    parser.add_argument("--task", required=True, help="What the agent should do")
+    parser.add_argument("--repo", help="Path to the target Python repo")
+    parser.add_argument("--task", help="What the agent should do")
     parser.add_argument("--max-attempts", type=int, default=None,
                         help="Override MAX_ATTEMPTS from .env (default 3)")
+    parser.add_argument("--list-models", action="store_true",
+                        help="List model IDs visible to the configured provider key, then exit")
     args = parser.parse_args(argv)
 
     settings = load_settings()
+    if args.list_models:
+        try:
+            models = list_available_models(settings)
+        except LLMError as e:
+            print(f"[ERROR] {e}", file=sys.stderr)
+            return 2
+        print(f"[MODELS] provider={settings.llm_provider} ({len(models)} visible)")
+        for model_id in models:
+            print(model_id)
+        return 0
+    if not args.repo or not args.task:
+        parser.error("--repo and --task are required unless --list-models is used")
+
     if args.max_attempts:
         settings.max_attempts = args.max_attempts
 
@@ -62,6 +77,9 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\n[ABORTED] interrupted by user", file=sys.stderr)
         report, exit_code = {"status": "interrupted"}, 130
+    except LLMError as e:  # fatal model/key/base-url problem: no point retrying
+        print(f"[ERROR] {e}", file=sys.stderr)
+        report, exit_code = {"status": "error", "error": str(e)}, 2
     except Exception as e:  # never die without writing a log
         print(f"[ERROR] agent loop crashed: {e}", file=sys.stderr)
         report, exit_code = {"status": "error", "error": str(e)}, 1
