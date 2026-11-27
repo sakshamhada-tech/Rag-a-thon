@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { GitBranch, Play } from 'lucide-react';
+import { FlaskConical, GitBranch, Github, Play } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { DemoRepo } from '../api/types';
 import { ErrorNotice } from './ErrorNotice';
@@ -67,8 +67,8 @@ export function RunSetup({ status, onStart }: Props) {
         <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
           <legend className="label">Source</legend>
           <div role="radiogroup" aria-label="Run source" style={{ display: 'grid', gap: 'var(--space-2)' }}>
-            <label className="source-option"><input type="radio" name="source" checked={source === 'demo'} onChange={() => setSource('demo')} /> Built-in demo</label>
-            <label className="source-option"><input type="radio" name="source" checked={source === 'github'} onChange={() => setSource('github')} /> Public GitHub URL</label>
+            <label className="source-option"><input type="radio" name="source" checked={source === 'demo'} onChange={() => setSource('demo')} /><FlaskConical aria-hidden="true" className="icon" /> Built-in demo</label>
+            <label className="source-option"><input type="radio" name="source" checked={source === 'github'} onChange={() => setSource('github')} /><Github aria-hidden="true" className="icon" /> Public GitHub URL</label>
           </div>
         </fieldset>
 

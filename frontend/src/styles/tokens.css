@@ -85,3 +85,22 @@
   --diff-del-text: #fda4af;
   --shadow-panel: none;
 }
+
+/* Phase 3 visual polish tokens */
+:root[data-theme='light'] {
+  --accent-soft: rgba(15, 118, 110, 0.12);
+  --accent-border: rgba(15, 118, 110, 0.34);
+  --panel-highlight: rgba(255, 255, 255, 0.72);
+  --ring-soft: rgba(15, 118, 110, 0.18);
+  --shadow-panel: 0 14px 40px rgba(32, 36, 42, 0.08);
+  --shadow-raised: 0 18px 44px rgba(32, 36, 42, 0.12);
+}
+
+:root[data-theme='dark'] {
+  --accent-soft: rgba(45, 212, 191, 0.13);
+  --accent-border: rgba(45, 212, 191, 0.36);
+  --panel-highlight: rgba(255, 255, 255, 0.055);
+  --ring-soft: rgba(45, 212, 191, 0.2);
+  --shadow-panel: 0 18px 54px rgba(0, 0, 0, 0.34);
+  --shadow-raised: 0 22px 64px rgba(0, 0, 0, 0.42);
+}

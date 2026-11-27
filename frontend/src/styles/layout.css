@@ -146,3 +146,97 @@ html, body, #root { height: 100%; overflow: hidden; }
   .event-actions { display: none; }
   .diff-line { grid-template-columns: 30px 30px 14px minmax(0,1fr); font-size: 10px; }
 }
+
+/* -------------------------------------------------- Phase 3 visual polish
+   Modern instrument panel: layered surfaces, restrained accent, real-state
+   motion only. No fake metrics; depth comes from borders, tone and spacing. */
+.app-shell {
+  background:
+    radial-gradient(circle at 18% -12rem, var(--accent-soft), transparent 34rem),
+    radial-gradient(rgba(128, 128, 128, 0.10) 1px, transparent 1.1px),
+    var(--bg);
+  background-size: auto, 22px 22px, auto;
+}
+
+.topbar {
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+  box-shadow: 0 1px 0 var(--border), 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 4%, var(--accent) 38%, var(--accent-hover) 50%, var(--accent) 62%, transparent 96%);
+  opacity: 0.38;
+  pointer-events: none;
+}
+.product-mark {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: inset 0 1px 0 var(--panel-highlight), 0 0 0 3px var(--ring-soft);
+}
+.provider-pill { background: var(--surface-2); border-color: var(--accent-border); }
+.status-chip { box-shadow: inset 0 1px 0 var(--panel-highlight); }
+.status-running, .status-pending, .status-awaiting_approval { box-shadow: 0 0 0 3px var(--warning-bg), inset 0 1px 0 var(--panel-highlight); }
+.status-applied { box-shadow: 0 0 0 3px var(--success-bg), inset 0 1px 0 var(--panel-highlight); }
+.status-failed, .status-error, .status-timed_out { box-shadow: 0 0 0 3px var(--danger-bg), inset 0 1px 0 var(--panel-highlight); }
+
+.panel {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 var(--panel-highlight);
+}
+.left-panel, .center-panel, .inspector { background: var(--surface); }
+.panel-title { color: var(--accent); letter-spacing: 0.08em; }
+
+.button { box-shadow: inset 0 1px 0 var(--panel-highlight); transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); }
+.button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-raised), inset 0 1px 0 var(--panel-highlight); }
+.button:active:not(:disabled) { transform: translateY(0); }
+.button-primary { box-shadow: 0 8px 24px var(--accent-soft), inset 0 1px 0 rgba(255, 255, 255, 0.35); }
+.icon-button { box-shadow: inset 0 1px 0 var(--panel-highlight); transition: background var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast); }
+.icon-button:hover { transform: translateY(-1px); border-color: var(--accent-border); }
+
+.source-option { background: var(--surface-2); transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast); }
+.source-option:hover { border-color: var(--accent-border); transform: translateY(-1px); }
+.source-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent), 0 8px 22px var(--accent-soft); }
+
+.run-item[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.run-item:hover { transform: translateX(2px); }
+
+.event-row { transition: transform var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast); }
+.event-row:hover { transform: translateX(3px); border-color: var(--accent-border); background: var(--surface-2); }
+.agent-marker { border-color: var(--border-strong); box-shadow: 0 0 0 3px var(--surface), inset 0 1px 0 var(--panel-highlight); }
+.agent-developer { box-shadow: 0 0 0 3px var(--surface), 0 0 18px var(--accent-soft); }
+.agent-tester { box-shadow: 0 0 0 3px var(--surface), 0 0 16px rgba(21, 127, 61, 0.18); }
+.agent-reviewer { box-shadow: 0 0 0 3px var(--surface), 0 0 16px var(--warning-bg); }
+.retry-row { background: var(--warning-bg); border-left-color: var(--warning); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
+.inline-notice { background: var(--surface-2); }
+
+.tool-row { background: color-mix(in srgb, var(--surface-2) 82%, var(--surface) 18%); border-color: var(--accent-border); box-shadow: inset 0 1px 0 var(--panel-highlight); }
+.tool-summary { transition: background var(--transition-fast); }
+.tool-name { color: var(--accent); }
+.cached-badge { background: var(--surface); border-color: var(--accent-border); }
+
+.tabs { background: color-mix(in srgb, var(--surface-2) 54%, transparent); }
+.tab[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); border-bottom-color: var(--accent); }
+.diff-file { box-shadow: inset 0 1px 0 var(--panel-highlight); }
+.diff-file-header { background: color-mix(in srgb, var(--surface-3) 86%, var(--accent) 14%); border-bottom: 1px solid var(--border); }
+.diff-add { box-shadow: inset 3px 0 0 var(--success); }
+.diff-del { box-shadow: inset 3px 0 0 var(--danger); }
+.diff-hunk { font-weight: 700; }
+.count-box { background: var(--surface-2); box-shadow: inset 0 1px 0 var(--panel-highlight); }
+.verdict-approve { box-shadow: 0 0 0 3px var(--success-bg); }
+.verdict-reject { box-shadow: 0 0 0 3px var(--danger-bg); }
+
+.approval-panel { box-shadow: var(--shadow-raised), inset 4px 0 0 var(--warning); border-color: var(--warning); }
+.approval-actions .button-primary { min-width: 154px; justify-content: center; }
+.confirm-box { background: var(--surface-2); box-shadow: inset 0 1px 0 var(--panel-highlight); }
+.empty-block .icon { width: 30px; height: 30px; color: var(--accent); opacity: 0.85; }
+.footer-primary svg { color: var(--success); }
+.app-footer { background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .button:hover:not(:disabled), .icon-button:hover, .source-option:hover, .run-item:hover, .event-row:hover { transform: none !important; }
+}
