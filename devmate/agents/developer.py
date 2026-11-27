@@ -7,6 +7,7 @@ cap is hit; every call goes through the sandboxed tool registry and is logged.
 from __future__ import annotations
 
 import json
+import re
 
 from ..config import MAX_OUTPUT_CHARS
 from ..llm import LLMError
@@ -20,10 +21,12 @@ with your final answer as plain text and do NOT call any more tools.
 
 _PHASE_DETAILS = {
     "analyse": ("Explore the repo: list the tree, identify entry points, dependencies and "
-                "where the tests live. Read only — do not modify anything.",
+                "where the tests live. Read only — do not modify anything. "
+                "If you find the bug, do NOT patch it here; describe it in the summary.",
                 ["list_tree", "read_file", "search_code", "get_dependencies"]),
     "plan": ("State the suspected root cause and a concrete fix plan. Use search/read tools "
-             "to gather evidence first. Read only — do not modify anything.",
+             "to gather evidence first. Read only — do not modify anything. "
+             "If you are fairly sure how to fix it, describe the exact edit instead of making it.",
              ["list_tree", "read_file", "search_code", "get_dependencies"]),
     "fix": ("Edit the code to fix the bug using write_file / apply_patch. Prefer small, exact "
             "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
@@ -38,19 +41,35 @@ READONLY = _PHASE_DETAILS["analyse"][1]
 def run_developer(ctx, phase: str, state: dict, instruction: str) -> tuple[str, list[dict]]:
     """Run a capped tool-calling loop; returns (final_text, new_messages)."""
     detail, allowed = _PHASE_DETAILS[phase]
-    system = _SYSTEM.format(phase=phase, extra=detail)
+    allowed_list = ", ".join(allowed)
+    system = _SYSTEM.format(
+        phase=phase,
+        extra=(f"{detail}\nAllowed tools for this phase: {allowed_list}. "
+               "Do not call any other tool, even if you think it is needed later."))
     schemas = [ctx.tools[n].schema() for n in allowed]
     new_messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": instruction},
     ]
     final_text = ""
+    validation_retries = 0
     for _ in range(ctx.settings.max_tool_steps):
         try:
             resp = ctx.llm.chat(new_messages, schemas)
         except LLMError as e:
-            # Fatal for this run (bad key/model/base URL): stop instead of
-            # retrying the same failing call across all attempts.
+            if _is_unavailable_tool_error(e) and validation_retries < 2:
+                validation_retries += 1
+                correction = (
+                    f"The provider rejected a tool call: {e}\n"
+                    f"Only these tools exist in this phase: {allowed_list}. "
+                    "Do not call any other tool. If you meant to edit code, stop and "
+                    "describe the edit instead of calling it now.")
+                ctx.printer(f"[ERROR] {phase} tool-call rejected; retrying with correction "
+                            f"({validation_retries}/2)")
+                ctx.log_step(phase, "unavailable tool call rejected by provider", error=str(e))
+                new_messages.append({"role": "user", "content": correction})
+                continue
+            # Fatal for this run (bad key/model/base URL/tool schema): stop.
             ctx.printer(f"[ERROR] {phase} failed: {e}")
             ctx.log_step(phase, f"llm error: {e}")
             raise
@@ -73,6 +92,11 @@ def run_developer(ctx, phase: str, state: dict, instruction: str) -> tuple[str, 
         final_text = final_text or "[stopped: tool-step cap reached]"
         ctx.log_step(phase, final_text)
     return final_text, new_messages
+
+
+def _is_unavailable_tool_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return bool(re.search(r"(not in request\.tools|tool call validation failed|attempted to call tool|unknown tool)", text))
 
 
 def _test_context(state: dict) -> str:

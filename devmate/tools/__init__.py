@@ -47,7 +47,9 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
                  "start_line": {"type": "integer"},
                  "end_line": {"type": "integer"}},
               "required": ["path"]},
-             lambda a: repo_tools.read_file(sandbox, a["path"], a.get("start_line"), a.get("end_line"))),
+             lambda a: repo_tools.read_file(sandbox, a["path"],
+                                            a.get("start_line", a.get("line_start")),
+                                            a.get("end_line", a.get("line_end")))),
         Tool("search_code",
              "Regex search across repo text files. Returns 'path:line: snippet', capped.",
              {"type": "object", "properties": {
