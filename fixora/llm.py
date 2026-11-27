@@ -20,6 +20,7 @@ Tool schemas are passed as {"name", "description", "parameters": JSONSchema}.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -348,17 +349,43 @@ def _is_retryable(error: Exception) -> bool:
 
 
 class FallbackLLMClient:
-    """Try each client in order; switch on retryable errors with backoff."""
+    """Try each client in order; switch on retryable errors with backoff.
+
+    A client that exhausts its retries on a retryable error is placed on cooldown
+    and skipped entirely for `cooldown_seconds`, so subsequent calls don't burn
+    two failing requests plus a sleep on a key known to be rate-limited.
+    """
 
     provider_label = "fallback"
 
     def __init__(self, clients: list):
         self.clients = clients
+        self._cooldowns: dict[int, float] = {}
+        raw = (os.environ.get("FIXORA_PROVIDER_COOLDOWN", "300") or "300").strip()
+        try:
+            self.cooldown_seconds = max(0.0, float(raw))
+        except ValueError:
+            self.cooldown_seconds = 300.0
+
+    def _cooling(self, idx: int) -> float:
+        """Seconds remaining on this client's cooldown (0 when ready)."""
+        until = self._cooldowns.get(idx)
+        if not until:
+            return 0.0
+        remaining = until - time.monotonic()
+        return remaining if remaining > 0 else 0.0
 
     def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
         last_error: LLMError | None = None
+        now = time.monotonic()
         for idx, client in enumerate(self.clients):
             label = getattr(client, "provider_label", f"provider-{idx}")
+            remaining = self._cooling(idx)
+            if remaining > 0:
+                last_error = last_error or LLMError(
+                    f"Provider {label!r} is on cooldown for {int(remaining)}s "
+                    f"(retryable error; FIXORA_PROVIDER_COOLDOWN={int(self.cooldown_seconds)})")
+                continue
             for attempt in range(2):
                 try:
                     return client.chat(messages, tools, reasoning_effort=reasoning_effort)
@@ -369,11 +396,19 @@ class FallbackLLMClient:
                     if attempt == 0:
                         time.sleep(2 ** attempt)
                         continue
+                    if self.cooldown_seconds > 0:
+                        self._cooldowns[idx] = time.monotonic() + self.cooldown_seconds
                     if idx < len(self.clients) - 1:
                         nxt = getattr(self.clients[idx + 1], "provider_label", f"provider-{idx+1}")
-                        _log_fallback(f"[LLM FALLBACK] {label} failed ({_brief(e)}); switching to {nxt}")
+                        _log_fallback(f"[LLM FALLBACK] {label} failed ({_brief(e)}); "
+                                      f"skipping it for {int(self.cooldown_seconds)}s; trying {nxt}")
                     break
         assert last_error is not None
+        if all(self._cooling(i) > 0 for i in range(len(self.clients))):
+            earliest = min(self._cooldowns[i] for i in range(len(self.clients)))
+            retry_in = max(0, int(earliest - time.monotonic()))
+            raise LLMError(f"All {len(self.clients)} providers are on cooldown "
+                           f"(retryable errors, e.g. rate limits); next retry in ~{retry_in}s")
         raise last_error
 
 

@@ -321,6 +321,9 @@ Dependency problems are first-class:
 
 Other hardening in the same vein:
 
+- Providers that fail with a retryable error (429/5xx/timeout) are skipped for
+  `FIXORA_PROVIDER_COOLDOWN` seconds (default 300; `0` restores always-retry)
+  instead of being re-tried on every tool call.
 - Sandbox subprocesses (pytest, pip) run with a minimal allowlisted environment
   — host API keys and `FIXORA_API_TOKEN` are not visible to repo code.
 - `PYTHONDONTWRITEBYTECODE=1` plus explicit `__pycache__` invalidation after
