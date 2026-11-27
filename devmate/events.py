@@ -11,6 +11,8 @@ import threading
 import time
 import uuid
 
+from .security import redact_value
+
 
 class EventEmitter:
     def __init__(self, run_id: str | None = None):
@@ -21,7 +23,7 @@ class EventEmitter:
 
     def emit(self, type: str, **payload) -> dict:
         event = {"ts": time.strftime("%H:%M:%S"), "run_id": self.run_id,
-                 "type": type, **payload}
+                 "type": type, **redact_value(payload)}
         with self._lock:
             self.history.append(event)
             subscribers = list(self._subscribers)

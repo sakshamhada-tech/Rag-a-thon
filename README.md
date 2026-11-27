@@ -141,11 +141,30 @@ Config safety: `LLM_PROVIDERS` entries are printed as labels only (for example
 `groq1,groq2`); API keys are never printed at startup. Put all explicit entries
 on one physical `.env` line with a non-empty model.
 
+## Security
+
+- `.env`, `.env.*` (except `.env.example`), private keys and common credential
+  files are gitignored and are **not copied into the agent sandbox**; tool calls
+  to read/write them are rejected.
+- Startup logs show provider labels only (`groq1,groq2`), never API keys.
+  Known token patterns and exact values loaded from the environment are redacted
+  from printed output, events and command output.
+- Run logs/patches are written with owner-only permissions (`0600`; log dir
+  `0700`). Review them before sharing — they may contain source code.
+- Never paste real keys into chat, issues, commits or screenshots. Once exposed,
+  rotate/revoke them.
+- The API should bind to `127.0.0.1` locally. If you expose it, set
+  `DEVMATE_API_TOKEN` and send `Authorization: Bearer ...`; CORS defaults to
+  localhost origins (`CORS_ORIGINS` to override), never wildcard credentials.
+
 ## FastAPI server
 
 ```bash
 source .venv/bin/activate
-LLM_PROVIDER=groq python -m uvicorn devmate.api:app --host 0.0.0.0 --port 8000
+LLM_PROVIDER=groq python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
+
+# if binding 0.0.0.0, require a bearer token:
+DEVMATE_API_TOKEN=choose-a-long-random-token   python -m uvicorn devmate.api:app --host 0.0.0.0 --port 8000
 ```
 
 The API accepts **public GitHub URLs only** (`https://github.com/<owner>/<repo>`),

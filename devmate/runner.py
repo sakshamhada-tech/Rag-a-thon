@@ -11,6 +11,7 @@ decision; nothing is written back to the original repo (local runs) or exported
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import time
@@ -214,8 +215,11 @@ class RunManager:
             raise RunConflictError(f"run {run_id} is {record.status}, not awaiting_approval")
         diff = record.report.get("diff", "")
         if record.is_github:
+            LOGS_DIR.mkdir(mode=0o700, exist_ok=True)
+            os.chmod(LOGS_DIR, 0o700)
             patch_path = LOGS_DIR / f"{run_id}.patch"
             patch_path.write_text(diff, encoding="utf-8")
+            os.chmod(patch_path, 0o600)
             record.patch_file = str(patch_path)
             record.report["patch_file"] = record.patch_file
             applied = {"patch_file": record.patch_file,
@@ -301,7 +305,8 @@ class RunManager:
                 pass
 
     def _save_log(self, record: RunRecord):
-        LOGS_DIR.mkdir(exist_ok=True)
+        LOGS_DIR.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(LOGS_DIR, 0o700)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = LOGS_DIR / f"{stamp}-{record.run_id}.json"
         payload = {
@@ -317,4 +322,5 @@ class RunManager:
             "report": record.report,
         }
         path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        os.chmod(path, 0o600)
         record.log_file = str(path)

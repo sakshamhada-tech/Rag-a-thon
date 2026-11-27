@@ -1,6 +1,9 @@
 """DevMate Phase 2 — FastAPI server with live SSE events.
 
-  python -m uvicorn devmate.api:app --host 0.0.0.0 --port 8000
+  python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
+
+  DEVMATE_API_TOKEN=... python -m uvicorn devmate.api:app --host 0.0.0.0 --port 8000
+  # clients: Authorization: Bearer <DEVMATE_API_TOKEN>
 
   POST /runs {"repo": "https://github.com/owner/repo", "task": "..."}  -> {run_id}
   GET  /runs/{id}/events   # SSE stream of structured events
@@ -11,30 +14,56 @@
 
 API accepts PUBLIC GITHUB URLs ONLY (validated); local paths are rejected here —
 use the CLI for local repos. One run at a time per server (429 otherwise).
+
+Security: local use should bind 127.0.0.1. If DEVMATE_API_TOKEN is set, every
+route except /health requires Authorization: Bearer <token>. CORS origins
+default to common localhost dev servers; override with CORS_ORIGINS (comma-
+separated). No credentials are allowed cross-origin.
 """
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import os
 import queue
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from .github import RepoInputError
 from .runner import RunBusyError, RunConflictError, RunManager, RunNotFoundError
 
 app = FastAPI(title="DevMate Phase 2", version="0.2.0")
+
+_cors_origins = [origin.strip() for origin in os.getenv(
+    "CORS_ORIGINS",
+    "http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173",
+).split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    token = os.getenv("DEVMATE_API_TOKEN")
+    if token and request.url.path != "/health":
+        header = request.headers.get("authorization", "")
+        supplied = header[7:] if header.lower().startswith("bearer ") else ""
+        if not supplied or not hmac.compare_digest(supplied, token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authorization: Bearer <DEVMATE_API_TOKEN> is required"},
+            )
+    return await call_next(request)
 
 manager = RunManager()
 _STREAM_CLOSE_STATUSES = {"awaiting_approval", "applied", "rejected", "failed", "error", "timed_out"}

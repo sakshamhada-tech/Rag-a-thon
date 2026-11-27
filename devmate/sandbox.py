@@ -22,9 +22,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import MAX_OUTPUT_CHARS
+from .security import is_sensitive_path, redact_text
 
 _SKIP_DIRS = {".git", ".hg", ".svn", "__pycache__", ".pytest_cache",
-              ".venv", "venv", "node_modules", ".mypy_cache", ".ruff_cache"}
+              ".venv", "venv", "node_modules", ".mypy_cache", ".ruff_cache",
+              ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".docker", ".secrets"}
 
 
 class SandboxError(Exception):
@@ -58,8 +60,13 @@ class Sandbox:
             raise SandboxError(f"Target repo not found or not a directory: {self.source_repo}")
         self.root = Path(tempfile.mkdtemp(prefix="devmate-workspace-")).resolve()
         workspace_copy = self.root / self.source_repo.name
+
+        def ignore(directory, names):
+            return {name for name in names
+                    if name in _SKIP_DIRS or is_sensitive_path(Path(directory) / name)}
+
         shutil.copytree(self.source_repo, workspace_copy,
-                        ignore=shutil.ignore_patterns(*_SKIP_DIRS, "*.pyc"))
+                        ignore=ignore)
         self._workspace_copy = workspace_copy
 
     # ---------------------------------------------------------- paths
@@ -80,11 +87,15 @@ class Sandbox:
             raise SandboxError("path contains a null byte")
         if os.path.isabs(path):
             raise SandboxError(f"absolute paths are not allowed: {path!r}")
+        if is_sensitive_path(path):
+            raise SandboxError("sensitive env/credential files are not accessible in the sandbox")
         candidate = self.workspace / path
         resolved = Path(os.path.realpath(candidate))  # resolves symlinks
         ws_real = Path(os.path.realpath(self.workspace))
         if resolved != ws_real and ws_real not in resolved.parents:
             raise SandboxError(f"path escapes the workspace: {path!r}")
+        if is_sensitive_path(resolved):
+            raise SandboxError("sensitive env/credential files are not accessible in the sandbox")
         return resolved
 
     def rel(self, resolved: Path) -> str:
@@ -116,10 +127,12 @@ class Sandbox:
                 [sys.executable, *argv[1:]], cwd=self.workspace,
                 capture_output=True, text=True, timeout=timeout, shell=False)
             return CommandResult(argv=argv, returncode=proc.returncode,
-                                 stdout=_trunc(proc.stdout), stderr=_trunc(proc.stderr))
+                                 stdout=_trunc(redact_text(proc.stdout)),
+                                 stderr=_trunc(redact_text(proc.stderr)))
         except subprocess.TimeoutExpired as e:
             return CommandResult(argv=argv, returncode=-1,
-                                 stdout=_trunc(e.stdout or ""), stderr=_trunc(e.stderr or ""),
+                                 stdout=_trunc(redact_text(e.stdout or "")),
+                                 stderr=_trunc(redact_text(e.stderr or "")),
                                  timed_out=True)
 
     # ---------------------------------------------------------- diff
@@ -154,9 +167,9 @@ def _trunc(s, limit=MAX_OUTPUT_CHARS):
 def _snapshot(base: Path) -> dict[str, str]:
     files: dict[str, str] = {}
     for dirpath, dirs, names in os.walk(base):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not is_sensitive_path(Path(dirpath) / d)]
         for name in names:
-            if name.endswith((".pyc", ".pyo")):
+            if name.endswith((".pyc", ".pyo")) or is_sensitive_path(Path(dirpath) / name):
                 continue
             full = Path(dirpath) / name
             rel = str(full.relative_to(base))

@@ -150,7 +150,9 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - [x] Unit tests: aliases, argument validation, caching, mutation invalidation,
       approval gate (no write before approve; approve writes), GitHub URL
       validator, provider fallback, patch export, reviewer pseudo-tool fallback,
-      reasoning-effort selection, provider-plan secret redaction — 86 tests, all pass
+      reasoning-effort selection, provider-plan secret redaction, sandbox credential
+      exclusion, event/log redaction, owner-only log permissions, API bearer auth —
+      92 tests, all pass
 - [x] Offline end-to-end CLI (`LLM_PROVIDER=mock`) verified on `demo_repo` and
       `demo_repo_hard` (reaches `awaiting_approval`; two-bug retry observed on
       `demo_repo_hard`, logs in `logs/`)
@@ -162,7 +164,13 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `86 passed`.
+- Unit suite: `92 passed`.
+- Security hardening: tracked files/history were audited for obvious token
+  patterns (only placeholder examples found); real `.env` and common credential
+  files are excluded from sandboxes/diffs; startup prints provider labels only;
+  emitted events, command output and known-token patterns are redacted; run logs
+  and approval patches are owner-only; API can require `DEVMATE_API_TOKEN` and
+  CORS defaults to localhost origins.
 - Maintainer local Groq run on `demo_repo_hard` (2026-11-28, prompt supplied by
   maintainer): both bugs were fixed and tests reached `14 passed`, but the
   reviewer failed because Groq rejected pseudo-tool calls (`json`,
@@ -194,6 +202,8 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   a reasoning-capable family (gpt-oss, o-/gpt-5, grok-4, qwen3, deepseek-r).
 - CLI redacts `LLM_PROVIDERS` values to provider labels only and empty explicit
   `label|base_url|key|model` entries fail with a clear model error before API.
+- Redaction is best-effort pattern/exact-value matching, not a DLP system; source
+  code is not secret-scanned on ingest. Keep secrets out of tracked files.
 - One run at a time is process-global; a second concurrent `POST /runs` gets
   429. State is in-memory + JSON log (no DB, no restart recovery).
 - Run timeout marks the run `timed_out` in the API, but the graph is not

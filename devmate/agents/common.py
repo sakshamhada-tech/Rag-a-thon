@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from ..sandbox import Sandbox
 from ..config import Settings
 from ..events import EventEmitter
+from ..security import redact_text, redact_value
 
 _MUTATING_TOOLS = {"write_file", "apply_patch"}
 _READ_CACHE_MAX = 24000  # chars of already-read file contents to replay into prompts
@@ -34,13 +35,16 @@ class RunContext:
     # ------------------------------------------------------------------ log
     def log_step(self, node: str, message: str, **data):
         entry = {"ts": time.strftime("%H:%M:%S"), "node": node,
-                 "message": message, **data}
+                 "message": redact_text(message), **redact_value(data)}
         self.steps.append(entry)
         self.emitter.emit("step", node=node, message=message, **data)
 
     def tool_call(self, node: str, name: str, args: dict, result: str,
                   duration_ms: float = 0.0, cached: bool = False):
-        tag = f"[CACHED {name}({_fmt_args(args)})]" if cached else f"[TOOL CALL {name}({_fmt_args(args)})]"
+        result = redact_text(result)
+        args = redact_value(args)
+        tag = (f"[CACHED {name}({_fmt_args(args)})]" if cached
+               else f"[TOOL CALL {name}({_fmt_args(args)})]")
         self.printer(tag)
         self.steps.append({"ts": time.strftime("%H:%M:%S"), "node": node,
                            "tool": name, "args": args, "cached": cached,
@@ -76,12 +80,12 @@ class RunContext:
             return result
 
         tool = self.tools.get(name)
+        dt = 0.0
         if tool is None:
             result = json.dumps({"error": f"unknown tool: {name}"})
-            dt = 0.0
         else:
             t0 = time.perf_counter()
-            result = tool.run(args)
+            result = redact_text(tool.run(args))
             dt = (time.perf_counter() - t0) * 1000
         self.stats["tool_calls"] += 1
         if name in _MUTATING_TOOLS:
