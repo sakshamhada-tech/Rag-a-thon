@@ -39,12 +39,16 @@ _GUIDANCE = {
         "Read the offending file at the reported line, fix the syntax itself "
         "(do not restructure the code), then re-run the tests."),
     "dependency_missing": (
-        "A module is not importable. If it is declared in requirements.txt or "
-        "pyproject.toml, call the install_dependencies tool (installs only the "
-        "repo's own declared dependencies, into an isolated directory), then "
-        "re-run the tests. If it is not declared, either add the exact missing "
-        "dependency to requirements.txt, or fix the import/typo if the module "
-        "is internal."),
+        "A module (or pytest plugin) is not importable. If it is declared in "
+        "requirements.txt or pyproject.toml, call the install_dependencies tool "
+        "(installs only the repo's own declared dependencies, into an isolated "
+        "directory), then re-run the tests. If it is not declared, either add "
+        "the exact missing dependency to requirements.txt, or fix the "
+        "import/typo if the module is internal. Note: pytest may fail at "
+        "startup on arguments supplied by the repo's own config (for example "
+        "--asyncio-mode=strict needs pytest-asyncio, and that plugin is often "
+        "declared only under test extras) — if the repo cannot run its suite "
+        "in this environment, say so in the review instead of editing the repo."),
     "import_error": (
         "An import failed for a reason other than a missing third-party module "
         "(wrong name, bad relative path, partial import, circular import). "
@@ -106,6 +110,13 @@ _MODULE_FROM_RE = re.compile(
     r"ImportError:\s*cannot import name\s+['\"]?([\w]+)['\"]?\s+from\s+['\"]([\w\.]+)['\"]")
 _IMPORT_OTHER_RE = re.compile(r"\bImportError\b")
 _NO_TESTS_RE = re.compile(r"no tests ran|no tests collected", re.IGNORECASE)
+# pytest exits at CLI-parse time when the repo's config passes options provided by a
+# plugin that is not installed (e.g. --asyncio-mode=strict requires pytest-asyncio).
+_PLUGIN_ARG_RE = re.compile(r"unrecognized arguments:\s*([^\n]+)", re.IGNORECASE)
+_PLUGIN_HINTS = {"--asyncio-mode": "pytest-asyncio", "--cov": "pytest-cov",
+                 "--benchmark": "pytest-benchmark", "--timeout": "pytest-timeout",
+                 "--reruns": "pytest-rerunfailures", "--forked": "pytest-forked",
+                 "--xdist": "pytest-xdist", "-n": "pytest-xdist"}
 _ASSERT_RE = re.compile(r"\bassert\b|AssertionError", re.IGNORECASE)
 _EXCEPTION_RE = re.compile(r"^E\s+([\w\.]*(?:Error|Exception))\b", re.MULTILINE)
 _FAILED_RE = re.compile(r"^FAILED\s+\S+", re.MULTILINE)
@@ -159,6 +170,15 @@ def _classify(output: str, timed_out: bool, returncode: int | None) -> Diagnosis
         message = _first_line(text, _IMPORT_OTHER_RE) or "ImportError during collection"
         return Diagnosis(category="import_error", summary=message,
                          files=[p for p, _ in _FILE_LINE_RE.findall(text)[:5]])
+
+    plugin = _PLUGIN_ARG_RE.search(text)
+    if plugin:
+        args = plugin.group(1).strip()
+        hint = next((pkg for opt, pkg in _PLUGIN_HINTS.items() if opt in args), None)
+        summary = (f"pytest rejected arguments from the repo's config ({args}). "
+                   + (f"They are usually provided by the '{hint}' plugin, which is not installed."
+                      if hint else "A pytest plugin required by the repo's config is not installed."))
+        return Diagnosis(category="dependency_missing", summary=summary)
 
     if _NO_TESTS_RE.search(text) or returncode == 5:
         return Diagnosis(category="no_tests",

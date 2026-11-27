@@ -309,7 +309,7 @@ export default function App() {
         <button className="bottom-tab" aria-current={mobileTab === 'inspector'} onClick={() => setMobileTab('inspector')}><TerminalSquare aria-hidden="true" className="icon" />Inspector</button>
       </nav>
 
-      <footer className="app-footer" role="contentinfo" aria-label="Fixora phase 3 status">
+      <footer className="app-footer" role="contentinfo" aria-label="Fixora status">
         <span className="footer-item footer-primary"><ShieldCheck aria-hidden="true" className="icon" /> Fixora · agent workflow with a human approval gate</span>
         <span className="footer-item footer-right">Sandboxed workspace · nothing is applied until approval · logs stay in <span className="mono">logs/</span></span>
       </footer>

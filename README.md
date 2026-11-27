@@ -1,15 +1,29 @@
 # Fixora
 
-**From Generative AI to Agentic AI — hackathon project, Phase 4.**
+**From Generative AI to Agentic AI — hackathon project.**
 Fixora is an autonomous coding agent that takes a Python repo plus a task,
 analyses the repo, finds the bug, patches it, runs the real test suite, gets a
 second opinion from a Reviewer agent, and reports the result — from the CLI or
 from a small FastAPI server with live events.
 
-Small and working beats big and half-working: there is still no vector DB, no
-embeddings and no PR creation. Phase 4 adds a failure taxonomy, dependency
-installation and two more demos on top of the Phase 2 agent loop and the
-Phase 3 web UI.
+Small and working beats big and half-working: PR creation is out of scope, and
+retrieval runs in-memory with no database — but the RAG layer is genuinely
+hybrid (AST-aware chunks, BM25 **and** local vector similarity, reciprocal rank
+fusion), not just term-overlap search.
+
+### Problem & solution
+
+**Problem.** Small Python codebases with failing tests burn human time on
+localisation (which file? which line?) before any fixing happens — and naïve
+LLM agents hallucinate fixes into the wrong file, trust their own claim that
+"tests pass", or quietly weaken the tests to make them green.
+
+**Solution.** Fixora (1) copies the repo into a throwaway sandbox and never
+touches the original until a human approves, (2) grounds every prompt in what
+the codebase actually contains via local hybrid retrieval, (3) requires a
+**separate** Reviewer agent to approve a diff plus a **human** to approve the
+consequential action, and (4) measures success only by running the real test
+suite before and after every fix attempt — never by the model's say-so.
 
 ## How it works
 
@@ -54,6 +68,59 @@ anywhere.
   (see below).
 - **Server**: FastAPI + SSE (see `fixora/api.py`), one run at a time, run
   timeout, in-memory state plus JSON log on disk (`logs/`, gitignored).
+  `GET /health`, `GET /config`, `GET /demos`, `GET /memory` (cross-run lesson
+  store), and `GET /openapi.json`/`/docs` for the interactive API reference.
+
+## Tech stack (every model, API, framework, dataset and tool)
+
+**LLMs / APIs**
+- **Groq Cloud** (OpenAI-compatible REST) — default provider, free tier; model
+  `openai/gpt-oss-120b` (`GROQ_MODEL`); Groq offers no embeddings endpoint, so
+  generation only. `GET /openai/v1/models` can be probed with the app's
+  `--list-models`.
+- **Anthropic** (`claude-sonnet-4-5` default), **xAI Grok** (`grok-4-latest`),
+  **OpenAI** (`gpt-4o-mini` default) — supported alternative providers; any of
+  them or `mock` (offline, deterministic, smoke-testing only — not an LLM).
+- **Groq llama-3.3-70b-versatile** — used earlier in development; retired for
+  free/dev tiers on 2026-08-16; documented, not required.
+- **BAAI/bge-small-en-v1.5** (384-dim) — embedding model, only if
+  `FIXORA_EMBEDDER=fastembed` is chosen explicitly (optional; weights fetched
+  from Hugging Face at install/image-build time).
+- **Local hashed bag-of-n-grams embedder** — default embedding model; a
+  deterministic 384-dim hashed n-gram encoder written from scratch for this
+  project (no pretrained weights, fully offline, zero cost).
+- **Gemini free embedding API** — considered and rejected (keeps the zero-cost,
+  no-extra-keys guarantee). Not used.
+- **FAISS / `faiss-cpu`** — evaluated and rejected (pure-Python vector scan is
+  fast enough at this corpus size); the seam exists if corpora grow.
+- **Google / any other embedding API** — not used.
+
+**Frameworks & libraries**
+- **LangGraph** (agent graph: baseline→analyse→plan→fix→test→review→report;
+  retry routing, TypedDict state) · **FastAPI** + **Uvicorn** (API + SSE +
+  static UI) · **Pydantic** · **rank_bm25** (BM25Okapi) · **numpy** (pulled in
+  by rank_bm25) · **openai** and **anthropic** Python SDKs · **pytest**
+  (suite runner inside the fix loop and for the repo's own tests) ·
+  **tomllib** (stdlib) · **React 18** · **TypeScript** · **Vite** ·
+  **lucide-react** (icons) · **Fontsource** (self-hosted IBM Plex) ·
+  native **fetch**/**EventSource** (no TanStack Query/SWR). No Tailwind.
+- **Docker** (multi-stage image: Node build stage → slim Python runtime,
+  non-root user, single port, `PORT` env, `/health`).
+
+**Datasets** — none. Fixora is evaluated on its own fixtures (`demo_repo*`)
+and on public GitHub repositories; it trains nothing and ships no dataset.
+
+**Tools** — git (shallow clone of public repos), pip, npm, Node 20+,
+Python 3.11, curl. **AI coding tools used to build this project** — **Arena.ai
+Agent Mode** (an agentic coding harness; contributions recorded as `Arena
+Agent <arena-agent@users.noreply.github.com>` in git history, built on
+multiple frontier models) alongside human direction by the repository owner.
+
+## Team
+
+- **Saksham Hada** ([@sakshamhada-tech](https://github.com/sakshamhada-tech)) — project owner, direction & review.
+- **Arena.ai Agent** — AI pair-programmer used to build/maintain the codebase
+  (see `git log`).
 
 ## Setup
 
@@ -212,8 +279,13 @@ docker run --rm -p 8000:8000 -e LLM_PROVIDER=mock fixora
 ```
 
 The image builds `frontend/dist` in a Node stage, copies it into a slim Python
-runtime with git, and serves UI + API on `${PORT:-8000}`. It does not include a
-real `.env`; pass provider keys with `-e` only if you understand the risk.
+runtime with git, installs `fastembed` best-effort and pre-downloads
+BAAI/bge-small-en-v1.5 at build time (falls back to the hash embedder if the
+download fails), then serves UI + API on `${PORT:-8000}` as a non-root user.
+It does not include a real `.env`; pass provider keys with `-e` only if you
+understand the risk. **Note:** Docker was not available in the build sandbox
+used by the maintainer agent, so this image is written but not built/verified
+there — `docker build -t fixora .` is the command to run where Docker exists.
 
 ## Security
 
@@ -315,27 +387,92 @@ implemented; ordering matters for edits.
 
 ## RAG (retrieval-augmented generation)
 
-Fixora now grounds every fix prompt in *retrieval*, not just the file the agent
-happens to read first. This is **lexical RAG, local and free**:
+Fixora grounds every fix prompt in *retrieval*, not just the file the agent
+happens to read first. Retrieval is local, hybrid and free — no hosted vector
+database, no API keys, no per-token cost.
 
-- A BM25-style inverted index is built over line-window chunks of the target
-  repo (skips `.git`, venvs, caches and sensitive paths), stdlib-only, no
-  embeddings, no network, no API keys, no extra dependencies, no per-token cost.
-  It cannot rate-limit or go down; it is rebuilt automatically whenever the repo
-  changes.
-- At analyse, plan and fix time, a block of the most relevant chunks (path,
-  line ranges, BM25 scores) is injected into the prompt. The same retriever is
-  exposed to the agent as the `retrieve_code(query, k)` tool for deeper lookups.
-- The number of retrieved chunks is capped (analyse: 4, plan/fix: 5) and every
-  retrieval is logged as a `rag` step in the run timeline/logs.
-- Disable with `FIXORA_RAG=0`.
+**Pipeline (fixora/retrieval.py)**
 
-Honest limits: this is term-overlap retrieval, not neural semantic search. It is
-deterministic, free and genuinely retrieval-augmented (generation is fed by what
-the index returns), but it does not capture meaning beyond shared vocabulary
-(identifiers, test names, error messages — which is most of what bug fixing uses).
-Upgrading to neural embeddings later means swapping `fixora/rag.py`'s scoring
-function; prompts, tools and events stay the same.
+1. **AST-aware chunking** — Python files are parsed with `ast` into
+   function / async-function / method / class / test chunks (decorators,
+   docstrings and line ranges preserved), plus one **module chunk** per file
+   (imports + top-level statements) and **line-window** chunks (30 lines, 10
+   overlap) as a fallback for unparseable files. Index is signature-cached by
+   relpath+mtime+size; it rebuilds automatically on any repo change.
+2. **Hybrid scoring** — each query is scored with BM25 (via the `rank_bm25`
+   package; an internal Okapi BM25 is used as fallback) **and** with local
+   vector cosine similarity, then merged with **Reciprocal Rank Fusion**
+   (k = 60). The candidate pool is intentionally wider than the final k;
+   optional LLM reranking (below) only ever reorders within it.
+3. **Failure-driven queries** — at analyse/plan/fix time the base queries are
+   built from the *actual failing test names, the diagnosis category and the
+   exception* (e.g. `test rate applies at twentyfive items`,
+   `AssertionError`), not from the task text alone.
+4. **Query assist (Groq, optional)** — `FIXORA_QUERY_REWRITE=1` lets Groq
+   propose up to 3 alternative search queries; `FIXORA_RERANK=1` lets Groq
+   rerank the fused candidate pool. Both are **default ON but strictly
+   optional**: any LLM error, timeout, quota exhaustion or invalid JSON falls
+   back to local ranking, the run is never blocked, counts against Groq rate
+   limits (calls are cached per run), and they add nothing when no provider is
+   reachable. Set either to 0 to disable.
+5. **Embeddings** — the default is a deterministic, fully offline **hashed
+   bag-of-n-grams embedder** (384-dim, snake_case/camelCase/digit-aware
+   tokeniser, L2-normalised). It captures lexical similarity (identifiers,
+   error strings, test names) — most of what bug localisation needs — with
+   zero downloads. For neural semantics, `pip install fastembed` and set
+   `FIXORA_EMBEDDER=fastembed` to use **BAAI/bge-small-en-v1.5** (384-dim) via
+   ONNX; the Dockerfile attempts this at build time and falls back to the
+   hash embedder if the download is blocked. Retrieval always works — the
+   backend in use is reported in `stats()` and in the `retrieval` UI event.
+   Groq does **not** offer an embeddings endpoint (checked against
+   `GET /openai/v1/models`); Gemini's free embedding API was considered and
+   rejected to keep the zero-cost, no-keys guarantee.
+6. **Vector store** — a pure-Python in-memory cosine scan over the chunk
+   matrix. FAISS was evaluated and deliberately rejected: at the observed
+   corpus sizes (<5k chunks for realistic Python repos in this tool's scope) a
+   numpy/Python scan is sub-millisecond and removes a heavyweight native
+   dependency. No FAISS binary is shipped; if corpora grow by ~10x this is
+   the first place to swap in `faiss-cpu` (the scoring interface stays the
+   same). Documented deviation, not an oversight.
+7. **Context injection & tools** — analyse gets k=4 chunks, plan/fix k=5, plus
+   a `retrieve_code(query, k)` tool is exposed in every phase for deeper
+   lookups. Oversized repos index only code + tests (docs/markdown skipped)
+   above a size threshold.
+8. **Observability** — every retrieval is logged as a `retrieval` step/event
+   carrying the queries, backend, chunk count, index build time and the top
+   chunk previews; the UI renders these as an expandable retrieval panel.
+
+Disable retrieval entirely with `FIXORA_RAG=0`.
+
+Honest limits: neural semantic quality depends on the optional fastembed
+backend — the default hash embedder knows vocabulary, not meaning. Ranking on
+the bundled demos occasionally places module/window chunks above the exact
+buggy function; retrieval narrows the search space, it does not replace the
+agent's read-before-edit discipline. Cross-validating retrieved spans is left
+to the reviewer + tests.
+
+## Cross-run memory
+
+Beyond in-run context (graph state), Fixora keeps a tiny **cross-run lesson
+store** (`fixora/memory.py`):
+
+- After each run reaches its outcome, a distilled lesson is appended to
+  `logs/memory.json` (gitignored): symptom (diagnosis + failing tests),
+  suspected root cause (first line of the plan), fix summary (edits/files) and
+  outcome (status + after-test counts). API keys and common secret patterns
+  are redacted before write; at most 50 lessons are kept (FIFO).
+- At analyse time, the two most similar past lessons for the current
+  symptom/task are retrieved with the same local embedder (cosine ≥ 0.15) and
+  injected into the prompt as **clearly labelled hints** — never as ground
+  truth, never bypassing the human approval gate.
+- `FIXORA_MEMORY=0` disables both load and save; `FIXORA_MEMORY_PATH`
+  overrides the location. `GET /memory` returns the store for inspection;
+  the UI renders injected lessons as an amber "Memory" event with scores.
+- Memory is best-effort by design: any failure in load/save/recall is logged
+  and ignored, never raised into a run.
+- Honest limits: memory is a flat JSON file (no DB), written from *outcomes
+  reported by the pipeline* — a wrong lesson from a bad run is possible and is
+  only de-prioritised by similarity ranking, not by truth checking.
 
 ## Failure taxonomy and dependency errors
 
@@ -385,9 +522,14 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # unit tests (134 passing)
+python -m pytest tests/                   # 150 tests, all passing
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
+
+Cross-run memory smoke (mock, offline): the first run writes a lesson to
+`logs/memory.json`; re-running a *different* copy of the same fixture logs a
+`memory` event with the recalled lesson; `curl localhost:8000/memory` lists up
+to the last 50 lessons.
 
 Offline end-to-end smoke (no keys, no network, `LLM_PROVIDER=mock`):
 
@@ -406,7 +548,9 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 ## Repository layout
 
 - `fixora/` — the agent (`config`, `llm`, `sandbox`, `tools/`, `agents/`,
-  `events.py`, `runner.py`, `cli.py`, `api.py`, `github.py`)
+  `events.py`, `runner.py`, `cli.py`, `api.py`, `github.py`,
+  `retrieval.py`, `embeddings.py`, `query_assist.py`, `memory.py`,
+  `diagnostics.py`, `reasoning.py`, `security.py`, `rag.py` (deprecated shim))
 - `demo_repo/` — swiftcart (Phase 1 fixture)
 - `demo_repo_hard/` — ledgerline (Phase 2 fixture; two related bugs)
 - `demo_repo_syntax/` — skylark (Phase 4 fixture; syntax error blocks collection)
@@ -414,10 +558,15 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 - `frontend/` — React/TypeScript UI (built with Vite)
 - `Dockerfile` / `.dockerignore` — single-image API + built UI
 - `tests/` — unit tests for the sandbox, tools, graph routing, caching,
-  approval gate, GitHub validation and provider fallback
+  approval gate, GitHub validation, provider fallback, hybrid retrieval/AST
+  chunking/query-assist fallbacks and cross-run memory (150 passing)
+- `ARCHITECTURE.md` / `DEMO.md` / `SLIDES_OUTLINE.md` — architecture, demo
+  script and presentation outline
 - `logs/` — JSON run logs and approval patches (gitignored)
 - `SPEC.md` — architecture note + phase status
 
 ## What is deliberately out of scope
 
-Web UI, deployment, Docker, vector search, PR creation. See `SPEC.md`.
+PR creation / pushing branches, multi-tenant auth, billing/cost accounting,
+non-Python targets, a hosted vector database, and persistent (DB-backed) run
+state. See `SPEC.md` for the full list and the phase-by-phase record.

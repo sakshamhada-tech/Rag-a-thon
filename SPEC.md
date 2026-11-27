@@ -127,6 +127,72 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 ## Status
 
+### Done (Master completion pass)
+
+- [x] **DevMate → Fixora rename** verified repo-wide (mechanical); no functional change.
+- [x] **RAG v2 (Fixora retrieval)**: AST-aware chunking (`function`/`class`/`method`/
+      `test` symbols + module chunk + 30-line windows fallback), hybrid **BM25 + local
+      vectors** merged via **Reciprocal Rank Fusion (k=60)**, BM25 via `rank_bm25`
+      (internal Okapi fallback), vector scoring via in-memory cosine scan (documented
+      FAISS deviation), failure-driven query building, Groq query-rewrite and rerank
+      (config-flagged, default ON, cached, graceful local fallback — never blocks a run),
+      big-repo mode (code+tests only over a size threshold), `file_bytes`/`build_ms`
+      stats, rich `retrieval` UI events (queries, backend, chunks, snippets).
+- [x] **Embeddings, honest**: default = local deterministic hashed bag-of-n-grams
+      (384-dim), zero download; optional `fastembed==0.9.1` + **BAAI/bge-small-en-v1.5**
+      behind `FIXORA_EMBEDDER=fastembed` (Dockerfile attempts install/prefetch at build
+      time, falls back silently otherwise). Groq has no embeddings endpoint; Gemini
+      free embeddings considered and rejected (zero-cost/no-keys guarantee).
+- [x] **Cross-run memory** (`fixora/memory.py`): JSON lesson store
+      (`logs/memory.json`, FIFO cap 50, redacted), cosine recall top-2 (≥0.15) with
+      the RAG embedder, labelled "hints — NOT ground truth" in analyse; save on run
+      outcome; `FIXORA_MEMORY=0` kill switch; `FIXORA_MEMORY_PATH` override;
+      `GET /memory`; amber "Memory" row + expandable lesson cards in the UI;
+      `memory` run events; never raises into a run.
+- [x] **LLM token usage**: provider-reported `usage` captured on every response
+      and logged (`[LLM USAGE] prompt/completion/total`) for Groq-frugal ops.
+- [x] **Dependency install size limit**: pip `--target` tree checked after install,
+      `FIXORA_INSTALL_MAX_MB` (default 512 MB) — oversize install fails closed.
+- [x] **API**: `GET /memory`; `/memory` listed in the JSON endpoint directory;
+      stale `Phase 3` service string fixed.
+- [x] **UI**: retrieval + memory events render (icon, queries, index stats,
+      expandable chunk snippets, lesson cards); `frontend/dist` rebuilt; `/health`,
+      `/config`, `/demos`, `/memory` smoke-checked via TestClient.
+- [x] Tests added: AST chunking, syntax-error fallback, hybrid retrieval,
+      failure-driven queries, query-rewrite/rerank error+invalid-JSON fallbacks,
+      rerank dominance skip, memory roundtrip/disabled, analyse-time memory injection
+      with events — suite now **150 passing**.
+- [x] Docs: README (problem/solution, full tech-stack enumeration, team, RAG v2,
+      memory, security), ARCHITECTURE.md (Mermaid agent loop + retrieval + memory),
+      DEMO.md (3-minute script, matrices, honesty list), SLIDES_OUTLINE.md.
+
+### Honest limits of this pass
+
+- **Public-repo verification (2026-11-27, mock, this sandbox)**: cloned and ran
+  **more-itertools** (`https://github.com/more-itertools/more-itertools`) end to end —
+  772 passed at baseline, agent had nothing to fix, run stopped at
+  `awaiting_approval` with an empty diff, gate held, repo untouched. Cloned and ran
+  **tqdm** (`https://github.com/tqdm/tqdm`) — its pytest config requires plugins absent
+  from a stock environment (`--asyncio-mode=strict` ⇒ pytest-asyncio; also
+  `timeout` ⇒ pytest-timeout). The classifier previously called this `unknown`; a new
+  rule reports it as `dependency_missing` with the plugin name, verified live. With
+  `pip install pytest-asyncio pytest-timeout`, tqdm's suite collects (169 passed, 10
+  skipped — tkinter absent) and Fixora runs it to `awaiting_approval` with an empty
+  diff. Both plugins were **uninstalled afterwards to restore the declared
+  environment**. Real-bug repair on a public repo remains unproven — neither public
+  fixture had a failing test.
+- **Docker still not built here** (no docker binary in the sandbox) — the image is
+  written, with best-effort fastembed prefetch and fallback, but `docker build` is
+  unverified. Say so in the demo; run it where Docker exists.
+- **Retrieval ranking is hybrid-lexical by default** — module/window chunks can
+  outrank the exact buggy function on the demos; treat retrieval as narrowing, not proof.
+- **Cross-run memory writes outcome-derived lessons** — a wrong outcome cached as a
+  lesson is possible; mitigation is similarity ranking + clear labelling, not truth.
+- **No new real-provider (Groq) end-to-end run** — no key exists in the build sandbox;
+  everything offline is `mock`-verified. Tokens are N/A in this environment.
+- **Test→source linking and failing-test-first indexing** are not implemented
+  (big repos index code+tests only).
+
 ### Done (Phase 5)
 
 - [x] Local, offline RAG (`fixora/rag.py`): BM25 retrieval over 30-line
@@ -142,9 +208,9 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   selection) — all four demos reach `awaiting_approval` with RAG on (2 attempts
   for import/hard demos, 1 for swiftcart/syntax).
 - [x] RAG end-to-end verified offline (mock): retrieval module units, tool
-  round-trip, prompt injection assertions, edit-invalidation test; full suite
-  134 passing. Neural semantic embeddings deliberately NOT claimed; upgrade path
-  documented.
+  round-trip, prompt injection assertions, edit-invalidation test; suite was
+  green at this cut. Superseded by the hybrid RAG in the master completion
+  pass above; neural retrieval not claimed at this cut.
 
 ### Done (Phase 4)
 
@@ -204,7 +270,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `134 passed` (Phase 5 incl. RAG).
+- Unit suite: `150 passed` (Phase 5 RAG + master completion pass).
 - Failure-diagnosis end-to-end (mock, offline): `demo_repo_syntax` 1 attempt -> `awaiting_approval`; `demo_repo_import` 2 attempts -> `awaiting_approval`; checked-in fixtures untouched.
 - `install_dependencies` verified end-to-end against a locally built wheel (offline): failing tests diagnosed `dependency_missing`, isolated `pip --target` install, tests then pass. Public PyPI index path unverified.
 - Frontend production build: `npm run build` passes (TypeScript `--noEmit` + Vite).
@@ -227,11 +293,12 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 ### Phase 3/4/5 known limitations / honestly not verified
 
-- **RAG is lexical** (BM25-style), not neural semantic retrieval: it matches on shared
-  vocabulary (identifiers, test names, error strings), not meaning beyond shared terms.
-  It is free, offline and deterministic; it is not claimed to beat neural embeddings.
-  Real-provider runs with RAG on are unverified — only the deterministic mock was run
-  end-to-end (all four demos reach `awaiting_approval` with retrieval active).
+- **RAG is hybrid but lexical-by-default**: BM25 + hashed-bag-of-n-grams vectors fused
+  by RRF (plus optional fastembed neural backend). It matches shared vocabulary, not
+  meaning, unless the fastembed backend is enabled. It is free, offline and
+  deterministic; it is not claimed to beat neural embeddings. Real-provider runs with
+  RAG on are unverified — only the deterministic mock was run end-to-end (all four
+  demos reach `awaiting_approval` with retrieval active).
 - The mock is demo-shaped; the 10–15-defect mega-repo is NOT built yet (the `synthetic`
   fixture option remains open), so multi-bug capability is unproven, not claimed.
 - Docker was not rebuilt with Phase 4/5 changes.

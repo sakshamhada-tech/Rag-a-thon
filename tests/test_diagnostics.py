@@ -101,3 +101,13 @@ def test_to_dict_shape():
     for key in ("category", "label", "summary", "files", "module", "exceptions", "guidance"):
         assert key in d
     assert d["label"] == "Missing dependency"
+
+
+def test_classify_pytest_plugin_args_as_dependency_missing():
+    from fixora.diagnostics import classify_pytest_output
+    output = ('ERROR: usage: python -m pytest [options] [file_or_dir]\n'
+              'python -m pytest: error: unrecognized arguments: --asyncio-mode=strict\n'
+              '  inifile: /tmp/repo/pyproject.toml\n')
+    d = classify_pytest_output(output)
+    assert d.category == "dependency_missing"
+    assert "pytest-asyncio" in d.summary
