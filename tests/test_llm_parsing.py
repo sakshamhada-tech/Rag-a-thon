@@ -1,10 +1,16 @@
-"""Unit tests for provider response parsing (dict- or object-style payloads)."""
+"""Unit tests for provider response/request parsing (dict- or object-style)."""
+import json
 from types import SimpleNamespace
 
 import pytest
 
+import anthropic
+import openai
+
 from devmate.llm import (
+    AnthropicClient,
     LLMError,
+    OpenAIClient,
     _parse_anthropic_response,
     _parse_openai_response,
     _parse_tool_arguments,
@@ -67,3 +73,73 @@ def test_parse_tool_arguments_none_and_object():
     assert _parse_tool_arguments(None) == {}
     assert _parse_tool_arguments({"a": 1}) == {"a": 1}
     assert _parse_tool_arguments("[1, 2]") == {"_raw_arguments": [1, 2]}
+
+
+class _FakeOpenAI:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.captured = {}
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+        _FakeOpenAI.instances.append(self)
+
+    def _create(self, **kwargs):
+        self.captured = kwargs
+        return {"choices": [{"message": {"content": "ok", "tool_calls": []}}]}
+
+
+class _FakeAnthropicMessages:
+    def __init__(self):
+        self.captured = {}
+
+    def create(self, **kwargs):
+        self.captured = kwargs
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+
+class _FakeAnthropic:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.messages = _FakeAnthropicMessages()
+        _FakeAnthropic.instances.append(self)
+
+
+def _history_with_dict_tool_call():
+    return [
+        {"role": "system", "content": "PHASE: analyse\nYou are DevMate."},
+        {"role": "user", "content": "find the bug"},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "call_1", "name": "list_tree",
+                         "arguments": {"path": ".", "max_depth": 2}}]},
+        {"role": "tool", "tool_call_id": "call_1", "name": "list_tree", "content": "demo_repo/"},
+    ]
+
+
+def test_openai_client_serializes_dict_tool_calls(monkeypatch):
+    _FakeOpenAI.instances.clear()
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    client = OpenAIClient("key", "model", base_url="https://example.test/v1", provider_label="groq")
+    resp = client.chat(_history_with_dict_tool_call(), [])
+    captured = _FakeOpenAI.instances[0].captured
+    tool_call = captured["messages"][2]["tool_calls"][0]
+    assert tool_call["id"] == "call_1"
+    assert tool_call["function"]["name"] == "list_tree"
+    assert json.loads(tool_call["function"]["arguments"]) == {"path": ".", "max_depth": 2}
+    assert resp.text == "ok"
+
+
+def test_anthropic_client_serializes_dict_tool_calls(monkeypatch):
+    _FakeAnthropic.instances.clear()
+    monkeypatch.setattr(anthropic, "Anthropic", _FakeAnthropic)
+    client = AnthropicClient("key", "model")
+    resp = client.chat(_history_with_dict_tool_call(), [])
+    captured = _FakeAnthropic.instances[0].messages.captured
+    assistant = captured["messages"][1]  # Anthropic path omits the system message
+    tool_use = assistant["content"][0]
+    assert tool_use["type"] == "tool_use"
+    assert tool_use["id"] == "call_1"
+    assert tool_use["input"] == {"path": ".", "max_depth": 2}
+    assert resp.text == "ok"

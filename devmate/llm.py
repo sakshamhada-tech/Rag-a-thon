@@ -119,9 +119,11 @@ class AnthropicClient:
                 blocks = []
                 if m.get("content"):
                     blocks.append({"type": "text", "text": m["content"]})
-                for tc in m.get("tool_calls", []):
-                    blocks.append({"type": "tool_use", "id": tc.id, "name": tc.name,
-                                   "input": tc.arguments})
+                for i, tc in enumerate(m.get("tool_calls", [])):
+                    tc_id = str(_get(tc, "id", f"call_{i}"))
+                    tc_name = str(_get(tc, "name", ""))
+                    blocks.append({"type": "tool_use", "id": tc_id, "name": tc_name,
+                                   "input": _parse_tool_arguments(_get(tc, "arguments", {}), tc_name)})
                 convo.append({"role": "assistant", "content": blocks or [{"type": "text", "text": ""}]})
             elif role == "tool":
                 convo.append({"role": "user", "content": [
@@ -164,10 +166,14 @@ class OpenAIClient:
             elif role == "assistant":
                 msg: dict = {"role": "assistant", "content": m.get("content") or None}
                 if m.get("tool_calls"):
-                    msg["tool_calls"] = [{
-                        "id": tc.id, "type": "function",
-                        "function": {"name": tc.name,
-                                     "arguments": json.dumps(tc.arguments)}} for tc in m["tool_calls"]]
+                    serialized = []
+                    for i, tc in enumerate(m["tool_calls"]):
+                        tc_name = str(_get(tc, "name", ""))
+                        serialized.append({
+                            "id": str(_get(tc, "id", f"call_{i}")), "type": "function",
+                            "function": {"name": tc_name,
+                                         "arguments": json.dumps(_parse_tool_arguments(_get(tc, "arguments", {}), tc_name))}})
+                    msg["tool_calls"] = serialized
                 oai.append(msg)
             elif role == "tool":
                 oai.append({"role": "tool", "tool_call_id": m["tool_call_id"],
