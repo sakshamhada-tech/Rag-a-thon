@@ -11,6 +11,7 @@ import re
 
 from ..config import MAX_OUTPUT_CHARS
 from ..llm import LLMError
+from ..reasoning import select_reasoning_effort
 
 _PHASE_ROLES = {"analyse": "Developer", "plan": "Developer", "fix": "Developer", "review": "Reviewer"}
 
@@ -129,8 +130,9 @@ def _test_context(state: dict) -> str:
 def analyse_node(ctx, state: dict) -> dict:
     instruction = (f"Task: {state['task']}\n\nExplore the repo and write a short repo_summary: "
                    "layout, entry points, dependencies, where the tests live.")
+    effort = select_reasoning_effort("analyse", state)
     summary, msgs = run_developer(ctx, "analyse", state, instruction + ctx.already_read_block(),
-                                  reasoning_effort="low")
+                                  reasoning_effort=effort)
     ctx.log_step("analyse", "repo summary ready")
     return {"repo_summary": summary, "messages": state.get("messages", []) + msgs}
 
@@ -139,7 +141,8 @@ def plan_node(ctx, state: dict) -> dict:
     instruction = (f"Task: {state['task']}\n\nRepo summary:\n{state.get('repo_summary', '')}\n\n"
                    "State the suspected root cause and the step-by-step fix plan. Do not edit yet."
                    + ctx.already_read_block())
-    plan, msgs = run_developer(ctx, "plan", state, instruction, reasoning_effort="medium")
+    effort = select_reasoning_effort("plan", state)
+    plan, msgs = run_developer(ctx, "plan", state, instruction, reasoning_effort=effort)
     ctx.log_step("plan", "plan ready", plan=plan)
     return {"plan": plan, "messages": state.get("messages", []) + msgs}
 
@@ -157,7 +160,8 @@ def fix_node(ctx, state: dict) -> dict:
                    f"Attempt {attempts} of {state.get('max_attempts', 3)}. "
                    "Fix the bug now. Do not modify tests."
                    + ctx.already_read_block())
-    _, msgs = run_developer(ctx, "fix", state, instruction, reasoning_effort="low")
+    effort = select_reasoning_effort("fix", state, attempt_number=attempts)
+    _, msgs = run_developer(ctx, "fix", state, instruction, reasoning_effort=effort)
     edits = state.get("edits_made", []) + _edits_from(msgs)
     ctx.log_step("fix", f"attempt {attempts} complete", edits=len(edits))
     return {"attempts": attempts, "edits_made": edits,

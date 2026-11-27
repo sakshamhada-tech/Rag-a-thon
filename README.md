@@ -119,9 +119,11 @@ LLM_PROVIDERS=groq,openai
 LLM_PROVIDERS=groq|https://api.groq.com/openai/v1|gsk-key|openai/gpt-oss-120b,openai|https://api.openai.com/v1|sk-key|gpt-4o-mini
 ```
 
-`reasoning_effort` is sent as `low` for analyse/fix and `medium` for plan/review
-when the model supports it (gpt-oss / o-/gpt-5 / grok-4 / qwen3 family).
-`max_tokens` stays capped at 4096.
+`reasoning_effort` is selected dynamically per operation: `low` for simple
+tasks, `medium` for moderate ones, and `high` for complex work or after failed
+retries (based on task wording, failing-test count, retry number and diff
+size). Providers such as gpt-oss / o-/gpt-5 / grok-4 / qwen3 receive the hint;
+others ignore it. `max_tokens` stays capped at 4096.
 
 ### Use Grok (xAI)
 

@@ -106,8 +106,8 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   `label|base_url|key|model`); switches on 429/timeout/5xx/connection errors
   with exponential backoff and a `[LLM FALLBACK]` log line. Non-retryable 4xx
   (e.g. bad schema) is raised immediately — it is never masked by fallback.
-- `reasoning_effort` sent as `low` (analyse/fix) and `medium` (plan/review)
-  when the model supports it; `max_tokens` capped at 4096.
+- `reasoning_effort` is chosen dynamically by `devmate/reasoning.py` when the
+  model supports it; `max_tokens` capped at 4096.
 - `MockClient` extended: plans, reviews (auto-approve JSON) and can drive
   `demo_repo_hard` through the two-bug retry sequence offline.
 
@@ -132,8 +132,9 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - [x] `read_file` aliases (`start_line`/`line_start`/`start`, `end_line`/`line_end`/`end`)
 - [x] Tool-argument validation returning data, not exceptions
 - [x] Per-step timings (LLM call, tool, retries) in run log and report
-- [x] `reasoning_effort` low for analyse/fix, medium for plan/review;
-      `max_tokens` capped at 4096
+- [x] Dynamic `reasoning_effort` (low/medium/high) selected by operation complexity
+      (task keywords, failing-test count, retry number, diff size) in addition to
+      phase defaults; `max_tokens` capped at 4096
 - [x] `LLM_PROVIDERS` fallback chain with exponential backoff + `[LLM FALLBACK]` log
 - [x] Reviewer agent node (read-only tools, strict JSON), hard code rule for
       `tests/` diffs forcing rejection on removed/loosened assertions
@@ -148,8 +149,8 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - [x] `demo_repo_hard/` fixture (two related bugs across two modules)
 - [x] Unit tests: aliases, argument validation, caching, mutation invalidation,
       approval gate (no write before approve; approve writes), GitHub URL
-      validator, provider fallback, patch export, reviewer pseudo-tool fallback —
-      79 tests, all pass
+      validator, provider fallback, patch export, reviewer pseudo-tool fallback,
+      reasoning-effort selection — 84 tests, all pass
 - [x] Offline end-to-end CLI (`LLM_PROVIDER=mock`) verified on `demo_repo` and
       `demo_repo_hard` (reaches `awaiting_approval`; two-bug retry observed on
       `demo_repo_hard`, logs in `logs/`)
@@ -161,7 +162,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `79 passed`.
+- Unit suite: `84 passed`.
 - Maintainer local Groq run on `demo_repo_hard` (2026-11-28, prompt supplied by
   maintainer): both bugs were fixed and tests reached `14 passed`, but the
   reviewer failed because Groq rejected pseudo-tool calls (`json`,

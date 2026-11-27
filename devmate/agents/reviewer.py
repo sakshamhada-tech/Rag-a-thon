@@ -13,6 +13,7 @@ import json
 import re
 
 from ..llm import LLMError
+from ..reasoning import select_reasoning_effort
 from .developer import run_developer
 
 def review_node(ctx, state: dict) -> dict:
@@ -39,14 +40,16 @@ def review_node(ctx, state: dict) -> dict:
         f"Unified diff to review:\n```diff\n{diff}\n```\n\n"
         "Review the change and answer with the strict JSON verdict. "
         "Do not re-read files you already have.")
+    effort = select_reasoning_effort("review", state, diff=diff)
     try:
-        text, msgs = run_developer(ctx, "review", state, instruction, reasoning_effort="medium")
+        text, msgs = run_developer(ctx, "review", state, instruction,
+                                   reasoning_effort=effort)
     except LLMError as inspection_error:
         ctx.printer(f"[REVIEW] tool-enabled pass failed; retrying verdict-only "
                     f"(provider issue: {inspection_error})")
         ctx.log_step("review", "tool-enabled review failed; verdict-only fallback",
                      error=str(inspection_error))
-        review, fallback_msgs = _review_without_tools(ctx, state, diff, inspection_error)
+        review, fallback_msgs = _review_without_tools(ctx, state, diff, inspection_error, effort)
         if review is None:
             review = {"verdict": "reject",
                       "issues": [f"reviewer unavailable: {inspection_error}"],
@@ -79,7 +82,8 @@ def review_node(ctx, state: dict) -> dict:
     return {"review": review, "diff": diff, "messages": messages}
 
 
-def _review_without_tools(ctx, state: dict, diff: str, inspection_error: Exception):
+def _review_without_tools(ctx, state: dict, diff: str, inspection_error: Exception,
+                          effort: str = "medium"):
     """Ask the model for the verdict only.
 
     Some OpenAI-compatible providers reject a reviewer turn when the model emits
@@ -107,7 +111,7 @@ def _review_without_tools(ctx, state: dict, diff: str, inspection_error: Excepti
     ]
     try:
         resp, _ = ctx.timed_llm(lambda: ctx.llm.chat(messages, [],
-                                                     reasoning_effort="medium"))
+                                                     reasoning_effort=effort))
     except LLMError:
         return None, []
     assistant_msg = {"role": "assistant", "content": resp.text}
