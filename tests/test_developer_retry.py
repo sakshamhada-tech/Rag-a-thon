@@ -1,12 +1,12 @@
 """Unit tests for the developer tool-calling loop's provider-error handling."""
 import pytest
 
-from devmate.agents.common import RunContext
-from devmate.agents.developer import run_developer
-from devmate.config import Settings
-from devmate.llm import LLMError, LLMResponse
-from devmate.sandbox import Sandbox
-from devmate.tools import build_tools
+from fixora.agents.common import RunContext
+from fixora.agents.developer import run_developer
+from fixora.config import Settings
+from fixora.llm import LLMError, LLMResponse
+from fixora.sandbox import Sandbox
+from fixora.tools import build_tools
 
 
 def _settings():

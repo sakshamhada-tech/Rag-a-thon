@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from devmate.sandbox import Sandbox
-from devmate.tools import edit_tools
+from fixora.sandbox import Sandbox
+from fixora.tools import edit_tools
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from devmate.sandbox import Sandbox, SandboxError
+from fixora.sandbox import Sandbox, SandboxError
 
 
 @pytest.fixture

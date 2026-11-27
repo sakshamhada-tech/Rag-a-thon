@@ -1,11 +1,12 @@
 export type ThemeName = 'light' | 'dark';
 
-const THEME_KEY = 'devmate-theme';
+const THEME_KEY = 'fixora-theme';
+const LEGACY_THEME_KEY = 'devmate-theme'; // pre-rename key; read-only fallback
 const runningTransitions = new WeakSet<Document>();
 
 export function getStoredThemePreference(): 'light' | 'dark' | 'system' {
   try {
-    const value = localStorage.getItem(THEME_KEY);
+    const value = localStorage.getItem(THEME_KEY) ?? localStorage.getItem(LEGACY_THEME_KEY);
     return value === 'light' || value === 'dark' || value === 'system' ? value : 'system';
   } catch {
     return 'system';

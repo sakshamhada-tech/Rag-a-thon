@@ -140,7 +140,7 @@ class RunManager:
         self._watchdogs[record.run_id] = watchdog
         watchdog.start()
         thread = threading.Thread(target=self._run, args=(record, settings, printer),
-                                  daemon=True, name=f"devmate-{record.run_id}")
+                                  daemon=True, name=f"fixora-{record.run_id}")
         thread.start()
         return record
 
@@ -310,7 +310,7 @@ class RunManager:
             src = record.source_path.resolve()
             parent = src.parent
             tmp_root = Path(tempfile.gettempdir()).resolve()
-            safe_temp = parent.parent == tmp_root and parent.name.startswith(("devmate-github-", "devmate-demo-"))
+            safe_temp = parent.parent == tmp_root and parent.name.startswith(("fixora-github-", "fixora-demo-"))
             if safe_temp:
                 shutil.rmtree(parent, ignore_errors=True)
 

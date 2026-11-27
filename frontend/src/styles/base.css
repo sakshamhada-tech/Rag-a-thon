@@ -47,8 +47,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .notice { border: 1px solid var(--border); background: var(--neutral-bg); border-radius: var(--radius-sm); padding: var(--space-3); color: var(--text-muted); font-size: var(--text-sm); }
 .kbd { font-family: var(--font-mono); font-size: var(--text-xs); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 1px 5px; background: var(--surface-2); }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
-:root[data-theme-transition='to-dark']::view-transition-new(root) { animation: theme-wipe-down 680ms ease-in-out; clip-path: inset(0 0 0 0); z-index: 1; }
-:root[data-theme-transition='to-light']::view-transition-new(root) { animation: theme-wipe-up 680ms ease-in-out; clip-path: inset(0 0 0 0); z-index: 1; }
+:root[data-theme-transition='to-dark']::view-transition-new(root) { animation: theme-wipe-down 460ms ease-in-out; clip-path: inset(0 0 0 0); z-index: 1; }
+:root[data-theme-transition='to-light']::view-transition-new(root) { animation: theme-wipe-up 460ms ease-in-out; clip-path: inset(0 0 0 0); z-index: 1; }
 ::view-transition-old(root) { z-index: 0; }
 @keyframes theme-wipe-up { from { clip-path: inset(100% 0 0 0); } to { clip-path: inset(0 0 0 0); } }
 @keyframes theme-wipe-down { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }

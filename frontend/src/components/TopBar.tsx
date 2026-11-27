@@ -8,9 +8,9 @@ export function TopBar({ status, config }: { status: RunStatus | 'idle' | string
   const model = config?.model || 'model unknown';
   return (
     <header className="topbar" role="banner">
-      <div className="product" aria-label="DevMate">
+      <div className="product" aria-label="Fixora">
         <span className="product-mark" aria-hidden="true">DM</span>
-        <span>DevMate</span>
+        <span>Fixora</span>
       </div>
       <div className="topbar-right">
         <StatusChip status={status} />

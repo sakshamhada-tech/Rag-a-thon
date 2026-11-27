@@ -18,8 +18,8 @@ _READ_CACHE_MAX = 24000  # chars of already-read file contents to replay into pr
 class RunContext:
     sandbox: Sandbox
     settings: Settings
-    llm: object                      # any LLM client from devmate.llm
-    tools: dict                      # name -> devmate.tools.Tool
+    llm: object                      # any LLM client from fixora.llm
+    tools: dict                      # name -> fixora.tools.Tool
     printer: callable = print
     emitter: EventEmitter = field(default_factory=EventEmitter)
 

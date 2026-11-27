@@ -1,11 +1,11 @@
-import type { DevmateEvent, ReviewVerdict, RunDetail, RunStatus, TestResult } from '../api/types';
+import type { FixoraEvent, ReviewVerdict, RunDetail, RunStatus, TestResult } from '../api/types';
 
 export interface RunState {
   currentRunId: string | null;
   status: RunStatus | 'idle';
   repo: string;
   task: string;
-  events: DevmateEvent[];
+  events: FixoraEvent[];
   detail: RunDetail | null;
   tests: TestResult[];
   reviews: ReviewVerdict[];
@@ -33,12 +33,12 @@ export type RunAction =
   | { type: 'select_run'; runId: string }
   | { type: 'detail_loaded'; detail: RunDetail }
   | { type: 'detail_failed'; message: string }
-  | { type: 'event_received'; event: DevmateEvent }
+  | { type: 'event_received'; event: FixoraEvent }
   | { type: 'sse_connecting' }
   | { type: 'sse_open' }
   | { type: 'sse_error'; message: string };
 
-function statusFromEvent(event: DevmateEvent, fallback: RunState['status']): RunState['status'] {
+function statusFromEvent(event: FixoraEvent, fallback: RunState['status']): RunState['status'] {
   if (event.type === 'start') return 'running';
   if (event.type === 'awaiting_approval') return 'awaiting_approval';
   if (event.type === 'applied') return 'applied';
@@ -46,7 +46,7 @@ function statusFromEvent(event: DevmateEvent, fallback: RunState['status']): Run
   return fallback;
 }
 
-function mergeEvent(events: DevmateEvent[], event: DevmateEvent): DevmateEvent[] {
+function mergeEvent(events: FixoraEvent[], event: FixoraEvent): FixoraEvent[] {
   if (event.seq != null) {
     const index = events.findIndex((e) => e.seq === event.seq && e.type === event.type);
     if (index >= 0) {

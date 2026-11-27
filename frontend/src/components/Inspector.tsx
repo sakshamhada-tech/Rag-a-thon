@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FileDiff, FlaskConical, ScrollText, ShieldCheck, X } from 'lucide-react';
-import type { DevmateEvent, RunDetail, ReviewVerdict, TestResult } from '../api/types';
+import type { FixoraEvent, RunDetail, ReviewVerdict, TestResult } from '../api/types';
 import { DiffView } from './DiffView';
 import { TestsView } from './TestsView';
 import { ReviewView } from './ReviewView';
@@ -15,7 +15,7 @@ interface Props {
   currentRunId: string | null;
   status: string;
   detail: RunDetail | null;
-  events: DevmateEvent[];
+  events: FixoraEvent[];
   outcome: string | null;
   busy: boolean;
   onApprove: () => Promise<void>;
@@ -52,10 +52,7 @@ export function Inspector({ open, onClose, currentRunId, status, detail, events,
   return (
     <aside className={`panel inspector ${open ? 'open' : ''}`} aria-label="Run inspector">
       <div className="inspector-head">
-        <div style={{ minWidth: 0 }}>
-          <div className="panel-title" style={{ margin: 0 }}>Inspector</div>
-          <div className="mono muted" style={{ fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentRunId ? currentRunId.slice(0, 12) : 'no run selected'}</div>
-        </div>
+        <div className="panel-title" style={{ margin: 0 }}>Inspector</div>
         <button className="icon-button" onClick={onClose} aria-label="Collapse inspector"><X aria-hidden="true" className="icon" /></button>
       </div>
 

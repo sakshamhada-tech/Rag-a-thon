@@ -23,7 +23,7 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --transition-fast: 160ms ease;
-  --transition-theme: 640ms cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-theme: 460ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 :root[data-theme='light'] {

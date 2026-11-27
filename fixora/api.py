@@ -1,9 +1,9 @@
-"""DevMate Phase 2 — FastAPI server with live SSE events.
+"""Fixora Phase 2 — FastAPI server with live SSE events.
 
-  python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
+  python -m uvicorn fixora.api:app --host 127.0.0.1 --port 8000
 
-  DEVMATE_API_TOKEN=... python -m uvicorn devmate.api:app --host 0.0.0.0 --port 8000
-  # clients: Authorization: Bearer <DEVMATE_API_TOKEN>
+  FIXORA_API_TOKEN=... python -m uvicorn fixora.api:app --host 0.0.0.0 --port 8000
+  # clients: Authorization: Bearer <FIXORA_API_TOKEN>
 
   POST /runs {"repo": "https://github.com/owner/repo", "task": "..."}  -> {run_id}
   GET  /runs/{id}/events   # SSE stream of structured events
@@ -15,7 +15,7 @@
 API accepts PUBLIC GITHUB URLs ONLY (validated); local paths are rejected here —
 use the CLI for local repos. One run at a time per server (429 otherwise).
 
-Security: local use should bind 127.0.0.1. If DEVMATE_API_TOKEN is set, every
+Security: local use should bind 127.0.0.1. If FIXORA_API_TOKEN is set, every
 route except /health requires Authorization: Bearer <token>. CORS origins
 default to common localhost dev servers; override with CORS_ORIGINS (comma-
 separated). No credentials are allowed cross-origin.
@@ -43,7 +43,7 @@ from .runner import RunBusyError, RunConflictError, RunManager, RunNotFoundError
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
-app = FastAPI(title="DevMate Phase 2", version="0.2.0")
+app = FastAPI(title="Fixora Phase 2", version="0.2.0")
 
 _cors_origins = [origin.strip() for origin in os.getenv(
     "CORS_ORIGINS",
@@ -60,7 +60,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_api_token(request: Request, call_next):
-    token = os.getenv("DEVMATE_API_TOKEN")
+    token = os.getenv("FIXORA_API_TOKEN")
     path = request.url.path
     static_shell = request.method == "GET" and (
         path == "/" or path == "/favicon.ico" or path.startswith("/assets/")
@@ -71,7 +71,7 @@ async def require_api_token(request: Request, call_next):
         if not supplied or not hmac.compare_digest(supplied, token):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authorization: Bearer <DEVMATE_API_TOKEN> is required"},
+                content={"detail": "Authorization: Bearer <FIXORA_API_TOKEN> is required"},
             )
     return await call_next(request)
 
@@ -104,7 +104,7 @@ def index():
     if index_html.is_file():
         return FileResponse(index_html)
     return {
-        "service": "DevMate Phase 3 API",
+        "service": "Fixora Phase 3 API",
         "status": "ok",
         "message": "Frontend not built. Run `npm --prefix frontend install && npm --prefix frontend run build`, or use /docs for the API.",
         "endpoints": ["/health", "/config", "/demos", "/runs", "/docs", "/openapi.json"],

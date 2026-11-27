@@ -1,6 +1,6 @@
 """Unit tests for the graph's routing functions and pytest output parsing."""
-from devmate.agents.graph import after_test, after_review
-from devmate.tools.test_tools import _parse_counts, _parse_failing
+from fixora.agents.graph import after_test, after_review
+from fixora.tools.test_tools import _parse_counts, _parse_failing
 
 SAMPLE = """..........FFF.                                                           [100%]
 =================================== FAILURES ===================================

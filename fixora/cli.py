@@ -1,8 +1,8 @@
-"""DevMate CLI entry point (Phase 2).
+"""Fixora CLI entry point (Phase 2).
 
-  python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
-  python -m devmate.cli --repo https://github.com/owner/repo --task "Fix the failing tests"
-  python -m devmate.cli ... --yes          # approve & apply after reviewer passes
+  python -m fixora.cli --repo ./demo_repo --task "Find and fix the failing tests"
+  python -m fixora.cli --repo https://github.com/owner/repo --task "Fix the failing tests"
+  python -m fixora.cli ... --yes          # approve & apply after reviewer passes
 
 Prints each step live ([ANALYSE] [PLAN] [TOOL CALL ...] [CACHED ...] [TEST]
 [RETRY n] [REVIEW] [REPORT]), saves a JSON run log to logs/<timestamp>-<id>.json.
@@ -21,7 +21,7 @@ from .runner import RunBusyError, RunManager
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="DevMate Phase 2 — autonomous fix agent")
+    parser = argparse.ArgumentParser(description="Fixora Phase 2 — autonomous fix agent")
     parser.add_argument("--repo", help="Local path or https://github.com/<owner>/<repo>")
     parser.add_argument("--task", help="What the agent should do")
     parser.add_argument("--max-attempts", type=int, default=None,

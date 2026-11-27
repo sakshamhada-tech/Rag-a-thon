@@ -70,7 +70,7 @@ def redact_text(text) -> str:
     redacted = str(text)
     for name, value in os.environ.items():
         upper = name.upper()
-        if not (upper.endswith(_SECRET_NAME_SUFFIXES) or upper in {"LLM_PROVIDERS", "DEVMATE_API_TOKEN"}):
+        if not (upper.endswith(_SECRET_NAME_SUFFIXES) or upper in {"LLM_PROVIDERS", "FIXORA_API_TOKEN"}):
             continue
         if value and len(value) >= 8:
             redacted = redacted.replace(value, "[REDACTED]")

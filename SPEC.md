@@ -1,15 +1,15 @@
-# DevMate — SPEC
+# Fixora — SPEC
 
 ## Architecture note
 
-DevMate Phase 3 keeps the Phase 2 loop and adds a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
+Fixora Phase 3 keeps the Phase 2 loop and adds a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
 
 Phase 2 kept the Phase 1 sandboxed loop and added caching, a reviewer
 agent, a human approval gate, a FastAPI/SSE server and strict GitHub input
 handling:
 
 ```
-python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
+python -m fixora.cli --repo ./demo_repo --task "Find and fix the failing tests"
         │
         ▼
 ┌───────────────────────────────────────────────┐
@@ -108,7 +108,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   `label|base_url|key|model`); switches on 429/timeout/5xx/connection errors
   with exponential backoff and a `[LLM FALLBACK]` log line. Non-retryable 4xx
   (e.g. bad schema) is raised immediately — it is never masked by fallback.
-- `reasoning_effort` is chosen dynamically by `devmate/reasoning.py` when the
+- `reasoning_effort` is chosen dynamically by `fixora/reasoning.py` when the
   model supports it; `max_tokens` capped at 4096.
 - `MockClient` extended: plans, reviews (auto-approve JSON) and can drive
   `demo_repo_hard` through the two-bug retry sequence offline.
@@ -130,8 +130,8 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 ### Done (Phase 3)
 
 - [x] Backend additions: `GET /demos`, `GET /config` (provider/model only), demo runs via `POST /runs {demo_id, task}` with checked-in fixtures untouched (temp copy, patch-only approval), lightweight `GET /runs` summaries, SSE event sequence ids + `Last-Event-ID` replay filter.
-- [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `DEVMATE_API_TOKEN` is set, API routes remain protected.
-- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; fixed-height shell with internal scroll regions; compact footer; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
+- [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `FIXORA_API_TOKEN` is set, API routes remain protected.
+- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; fixed-height shell with internal scroll regions; resizable desktop regions via pointer/keyboard separators (widths persisted); compact footer; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
 - [x] Dockerfile (Node build stage + slim Python runtime with git) and `.dockerignore`.
 - [x] Backend tests extended to 97 passing; frontend `npm run build` passes.
 
@@ -152,7 +152,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - [x] Human approval gate: `awaiting_approval`; original repo untouched until
       approve; approve applies diff (local) or writes a patch file (GitHub);
       reject marks `rejected`; nothing consequential without approval
-- [x] FastAPI server (`devmate/api.py`) with `/runs` POST, `/runs/{id}/events`
+- [x] FastAPI server (`fixora/api.py`) with `/runs` POST, `/runs/{id}/events`
       SSE (replay + live), `GET /runs/{id}`, `POST /approve`, `POST /reject`,
       `GET /patch`, `GET /runs`; CORS; one run at a time (429); `RUN_TIMEOUT`
 - [x] Strict public GitHub URL validation + shallow clone with timeout/size cap
@@ -182,7 +182,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   patterns (only placeholder examples found); real `.env` and common credential
   files are excluded from sandboxes/diffs; startup prints provider labels only;
   emitted events, command output and known-token patterns are redacted; run logs
-  and approval patches are owner-only; API can require `DEVMATE_API_TOKEN` and
+  and approval patches are owner-only; API can require `FIXORA_API_TOKEN` and
   CORS defaults to localhost origins.
 - Maintainer local Groq run on `demo_repo_hard` (2026-11-28, prompt supplied by
   maintainer): both bugs were fixed and tests reached `14 passed`, but the
@@ -197,7 +197,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 - No real browser was available in this sandbox, so the View Transitions wipe direction, focus traversal, axe/Lighthouse audit, responsive breakpoints and screenshots were **not visually verified**. The CSS implements the specified clip-path directions; initial theme script and reduced-motion fallback follow the brief.
 - Docker was not installed in this sandbox, so `docker build` / `docker run` could not be executed here; the Dockerfile is written but unbuilt locally.
-- The UI talks to the live FastAPI app through same-origin routes; no `DEVMATE_API_TOKEN` browser-auth flow is provided for EventSource (local use should leave the token unset or use an authenticating proxy).
+- The UI talks to the live FastAPI app through same-origin routes; no `FIXORA_API_TOKEN` browser-auth flow is provided for EventSource (local use should leave the token unset or use an authenticating proxy).
 - Human visual QA still needed for both themes at desktop/tablet/mobile widths and for WCAG AA claims.
 
 ### Known limitations / honestly not verified

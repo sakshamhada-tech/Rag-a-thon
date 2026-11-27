@@ -7,7 +7,7 @@ import pytest
 import anthropic
 import openai
 
-from devmate.llm import (
+from fixora.llm import (
     AnthropicClient,
     LLMError,
     OpenAIClient,
@@ -109,7 +109,7 @@ class _FakeAnthropic:
 
 def _history_with_dict_tool_call():
     return [
-        {"role": "system", "content": "PHASE: analyse\nYou are DevMate."},
+        {"role": "system", "content": "PHASE: analyse\nYou are Fixora."},
         {"role": "user", "content": "find the bug"},
         {"role": "assistant", "content": "",
          "tool_calls": [{"id": "call_1", "name": "list_tree",

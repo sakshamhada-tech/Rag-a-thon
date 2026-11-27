@@ -51,7 +51,7 @@ def is_github_url(value: str) -> bool:
 def clone_public_repo(url: str, *, clone_timeout: int = 120, max_repo_mb: int = 50) -> Path:
     """Shallow-clone a validated public repo; returns the clone path."""
     normalized = validate_github_url(url)
-    dest = Path(tempfile.mkdtemp(prefix="devmate-github-")) / "repo"
+    dest = Path(tempfile.mkdtemp(prefix="fixora-github-")) / "repo"
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(

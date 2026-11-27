@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from devmate.events import EventEmitter
-from devmate.runner import RunManager, RunRecord
-from devmate.sandbox import Sandbox, SandboxError
-from devmate.tools import build_tools
-from devmate.config import Settings
-from devmate.security import redact_text
+from fixora.events import EventEmitter
+from fixora.runner import RunManager, RunRecord
+from fixora.sandbox import Sandbox, SandboxError
+from fixora.tools import build_tools
+from fixora.config import Settings
+from fixora.security import redact_text
 
 
 def _settings():
@@ -80,7 +80,7 @@ def test_redact_text_redacts_secret_assignments():
 
 
 def test_saved_run_logs_are_private(monkeypatch, tmp_path):
-    import devmate.runner as runner_module
+    import fixora.runner as runner_module
 
     monkeypatch.setattr(runner_module, "LOGS_DIR", tmp_path / "logs")
     manager = RunManager()
@@ -97,9 +97,9 @@ def test_saved_run_logs_are_private(monkeypatch, tmp_path):
 
 
 def test_api_requires_bearer_token_when_configured(monkeypatch):
-    from devmate.api import app
+    from fixora.api import app
 
-    monkeypatch.setenv("DEVMATE_API_TOKEN", "test-token-that-is-long-enough-123")
+    monkeypatch.setenv("FIXORA_API_TOKEN", "test-token-that-is-long-enough-123")
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/runs/not-a-run").status_code == 401
@@ -108,5 +108,5 @@ def test_api_requires_bearer_token_when_configured(monkeypatch):
     assert client.get("/runs/not-a-run",
                       headers={"Authorization": "Bearer test-token-that-is-long-enough-123"}
                       ).status_code == 404
-    monkeypatch.delenv("DEVMATE_API_TOKEN")
+    monkeypatch.delenv("FIXORA_API_TOKEN")
     assert client.get("/runs/not-a-run").status_code == 404

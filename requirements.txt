@@ -1,4 +1,4 @@
-# DevMate — Phase 2 (pinned)
+# Fixora — Phase 2 (pinned)
 langgraph==1.2.24
 anthropic==2.14.0
 openai==3.60.0

@@ -16,11 +16,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY devmate ./devmate
+COPY fixora ./fixora
 COPY demo_repo ./demo_repo
 COPY demo_repo_hard ./demo_repo_hard
 COPY README.md SPEC.md ./
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 EXPOSE 8000
 # Bind to all interfaces inside the container; put auth/TLS in front if exposed.
-CMD ["sh", "-c", "uvicorn devmate.api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn fixora.api:app --host 0.0.0.0 --port ${PORT:-8000}"]

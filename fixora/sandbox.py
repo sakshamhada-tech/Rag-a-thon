@@ -58,7 +58,7 @@ class Sandbox:
         self.source_repo = Path(self.source_repo).resolve()
         if not self.source_repo.is_dir():
             raise SandboxError(f"Target repo not found or not a directory: {self.source_repo}")
-        self.root = Path(tempfile.mkdtemp(prefix="devmate-workspace-")).resolve()
+        self.root = Path(tempfile.mkdtemp(prefix="fixora-workspace-")).resolve()
         workspace_copy = self.root / self.source_repo.name
 
         def ignore(directory, names):

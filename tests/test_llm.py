@@ -1,8 +1,8 @@
 """Unit tests for LLM provider selection (no network calls)."""
 import pytest
 
-from devmate.config import Settings
-from devmate.llm import LLMError, MockClient, OpenAIClient, get_llm, list_available_models
+from fixora.config import Settings
+from fixora.llm import LLMError, MockClient, OpenAIClient, get_llm, list_available_models
 
 
 def _settings(provider: str, **overrides) -> Settings:

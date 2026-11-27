@@ -102,7 +102,7 @@ def _review_without_tools(ctx, state: dict, diff: str, inspection_error: Excepti
         "JSON only, with no markdown fences and no prose outside the JSON object.")
     messages = [
         {"role": "system", "content":
-         "PHASE: review\nYou are DevMate's Reviewer agent. Output STRICT JSON only — "
+         "PHASE: review\nYou are Fixora's Reviewer agent. Output STRICT JSON only — "
          "no tools, no markdown, no extra prose — matching exactly "
          '{"verdict": "approve"|"reject", "issues": ["..."], "risk": "low"|"medium"|"high", '
          '"summary": "..."}. Check for a root-cause fix vs hack, weakened/deleted tests, '

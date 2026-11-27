@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import type { DevmateEvent } from '../api/types';
+import type { FixoraEvent } from '../api/types';
 
 function shortArgs(args: unknown): string {
   if (args == null) return '{}';
@@ -19,7 +19,7 @@ function pretty(value: unknown): string {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-export function ToolCallRow({ call, result }: { call: DevmateEvent; result?: DevmateEvent }) {
+export function ToolCallRow({ call, result }: { call: FixoraEvent; result?: FixoraEvent }) {
   const [open, setOpen] = useState(false);
   const tool = String(call.tool || 'tool');
   const cached = Boolean(call.cached || result?.cached);

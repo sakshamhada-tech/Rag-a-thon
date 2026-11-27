@@ -1,4 +1,4 @@
-import type { DevmateEvent } from './types';
+import type { FixoraEvent } from './types';
 
 export interface StreamHandle {
   close: () => void;
@@ -12,7 +12,7 @@ const KNOWN_EVENTS = [
 
 export function streamRun(
   runId: string,
-  onEvent: (event: DevmateEvent) => void,
+  onEvent: (event: FixoraEvent) => void,
   onError: (message: string) => void,
   onOpen?: () => void,
 ): StreamHandle {
@@ -28,7 +28,7 @@ export function streamRun(
 
   const parse = (message: MessageEvent) => {
     try {
-      const event = JSON.parse(message.data) as DevmateEvent;
+      const event = JSON.parse(message.data) as FixoraEvent;
       onEvent(event);
       if (event.type === 'stream_end') close();
     } catch {

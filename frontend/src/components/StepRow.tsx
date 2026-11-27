@@ -1,9 +1,9 @@
 import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, Loader2, Rocket, ShieldCheck, XCircle } from 'lucide-react';
-import type { DevmateEvent } from '../api/types';
+import type { FixoraEvent } from '../api/types';
 
 export type AgentKind = 'developer' | 'tester' | 'reviewer' | 'system';
 
-function agentFor(event: DevmateEvent): AgentKind {
+function agentFor(event: FixoraEvent): AgentKind {
   const node = String(event.node || event.type || '').toLowerCase();
   if (node.includes('review')) return 'reviewer';
   if (node.includes('test') || node.includes('baseline')) return 'tester';
@@ -19,7 +19,7 @@ export function AgentMarker({ agent }: { agent: AgentKind }) {
   return <span className="agent-marker agent-system" title="System"><Info {...common} /></span>;
 }
 
-function iconFor(event: DevmateEvent) {
+function iconFor(event: FixoraEvent) {
   switch (event.type) {
     case 'start': return <Rocket aria-hidden="true" className="icon" />;
     case 'done': return event.status === 'applied' ? <CheckCircle2 aria-hidden="true" className="icon" /> : <ClipboardCheck aria-hidden="true" className="icon" />;
@@ -32,7 +32,7 @@ function iconFor(event: DevmateEvent) {
   }
 }
 
-function titleFor(event: DevmateEvent): string {
+function titleFor(event: FixoraEvent): string {
   switch (event.type) {
     case 'start': return 'Run started';
     case 'step': return String(event.message || 'Step');
@@ -48,7 +48,7 @@ function titleFor(event: DevmateEvent): string {
   }
 }
 
-function detailFor(event: DevmateEvent): string | null {
+function detailFor(event: FixoraEvent): string | null {
   if (event.type === 'start') return `${event.repo || ''}${event.task ? ` — ${event.task}` : ''}`;
   if (typeof event.error === 'string') return event.error;
   if (typeof event.message === 'string' && event.type !== 'step') return event.message;
@@ -57,7 +57,7 @@ function detailFor(event: DevmateEvent): string | null {
   return null;
 }
 
-export function StepRow({ event }: { event: DevmateEvent }) {
+export function StepRow({ event }: { event: FixoraEvent }) {
   const agent = agentFor(event);
   const ms = typeof event.duration_ms === 'number' ? `${event.duration_ms.toFixed(0)}ms` : '';
   return (

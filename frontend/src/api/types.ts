@@ -1,6 +1,6 @@
 export type RunStatus = 'pending' | 'running' | 'awaiting_approval' | 'applied' | 'rejected' | 'failed' | 'error' | 'timed_out';
 
-export interface DevmateEvent {
+export interface FixoraEvent {
   seq?: number;
   ts: string;
   run_id: string;

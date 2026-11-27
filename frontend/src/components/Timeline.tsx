@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Radio, Wrench } from 'lucide-react';
-import type { DevmateEvent } from '../api/types';
+import type { FixoraEvent } from '../api/types';
 import { EmptyState } from './EmptyState';
 import { StepRow } from './StepRow';
 import { ToolCallRow } from './ToolCallRow';
 
 interface Props {
-  events: DevmateEvent[];
+  events: FixoraEvent[];
   status: string;
   sseStatus: 'idle' | 'connecting' | 'live' | 'disconnected';
   error?: string | null;
@@ -15,18 +15,18 @@ interface Props {
 interface RenderItem {
   key: string;
   kind: 'event' | 'tool';
-  event: DevmateEvent;
-  result?: DevmateEvent;
+  event: FixoraEvent;
+  result?: FixoraEvent;
 }
 
-function buildItems(events: DevmateEvent[]): RenderItem[] {
+function buildItems(events: FixoraEvent[]): RenderItem[] {
   const items: RenderItem[] = [];
   const used = new Set<number>();
   for (let i = 0; i < events.length; i += 1) {
     if (used.has(i)) continue;
     const event = events[i];
     if (event.type === 'tool_call') {
-      let result: DevmateEvent | undefined;
+      let result: FixoraEvent | undefined;
       for (let j = i + 1; j < events.length; j += 1) {
         const candidate = events[j];
         if (candidate.type === 'tool_result' && candidate.tool === event.tool) {

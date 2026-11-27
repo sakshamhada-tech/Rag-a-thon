@@ -1,5 +1,5 @@
 """Reasoning-effort selection tests."""
-from devmate.reasoning import complexity_score, select_reasoning_effort
+from fixora.reasoning import complexity_score, select_reasoning_effort
 
 
 def _state_with_failures(*names, errors=0):

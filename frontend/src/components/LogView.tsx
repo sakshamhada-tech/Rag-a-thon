@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Copy, Download, ScrollText, Check } from 'lucide-react';
-import type { DevmateEvent } from '../api/types';
+import type { FixoraEvent } from '../api/types';
 import { EmptyState } from './EmptyState';
 
-export function LogView({ events }: { events: DevmateEvent[] }) {
+export function LogView({ events }: { events: FixoraEvent[] }) {
   const [copied, setCopied] = useState(false);
   const json = useMemo(() => JSON.stringify(events, null, 2), [events]);
 
@@ -14,7 +14,7 @@ export function LogView({ events }: { events: DevmateEvent[] }) {
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `devmate-${events[0]?.run_id || 'run'}-events.json`; a.click();
+    a.href = url; a.download = `fixora-${events[0]?.run_id || 'run'}-events.json`; a.click();
     URL.revokeObjectURL(url);
   }
 

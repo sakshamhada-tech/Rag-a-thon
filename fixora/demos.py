@@ -41,7 +41,7 @@ def prepare_demo(demo_id: str) -> tuple[Path, str]:
     if source is None or not source.is_dir():
         raise RepoInputError(f"unknown demo: {demo_id!r}")
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="devmate-demo-"))
+    tmp_root = Path(tempfile.mkdtemp(prefix="fixora-demo-"))
     workspace = tmp_root / demo["id"]
 
     def ignore(directory, names):

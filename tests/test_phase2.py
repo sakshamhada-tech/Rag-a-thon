@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from devmate.config import Settings
-from devmate.github import RepoInputError, validate_github_url
-from devmate.llm import FallbackLLMClient, LLMError, LLMResponse
-from devmate.runner import RunManager
-from devmate.sandbox import Sandbox
-from devmate.tools import build_tools
-from devmate.agents.common import RunContext
+from fixora.config import Settings
+from fixora.github import RepoInputError, validate_github_url
+from fixora.llm import FallbackLLMClient, LLMError, LLMResponse
+from fixora.runner import RunManager
+from fixora.sandbox import Sandbox
+from fixora.tools import build_tools
+from fixora.agents.common import RunContext
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEMO_HARD = REPO_ROOT / "demo_repo_hard"
@@ -208,9 +208,9 @@ def test_approve_applies_only_after_approval(monkeypatch, local_hard_copy):
 
 
 def test_github_approval_writes_patch_not_clone(tmp_path, monkeypatch):
-    from devmate.runner import RunRecord
+    from fixora.runner import RunRecord
 
-    monkeypatch.setattr("devmate.runner.LOGS_DIR", tmp_path)
+    monkeypatch.setattr("fixora.runner.LOGS_DIR", tmp_path)
     manager = RunManager()
     record = RunRecord(run_id="patchrun123", repo_input="https://github.com/a/b",
                        task="fix", is_github=True, max_attempts=1,
@@ -280,12 +280,12 @@ class _ToolInVerdictMode:
         if tools:
             raise LLMError("400 attempted to call tool 'commentary' which was not in request.tools")
         return LLMResponse(text='{"verdict":"approve","issues":[],"risk":"low","summary":"ok"}',
-                           tool_calls=[__import__("devmate.llm", fromlist=["ToolCall"]).ToolCall(
+                           tool_calls=[__import__("fixora.llm", fromlist=["ToolCall"]).ToolCall(
                                id="x", name="json", arguments={})])
 
 
 def test_review_verdict_only_fallback_approves_when_tools_are_hallucinated(tmp_path):
-    from devmate.agents.reviewer import review_node
+    from fixora.agents.reviewer import review_node
 
     sandbox, ctx = _sandbox_with_settings(tmp_path)
     try:
@@ -300,7 +300,7 @@ def test_review_verdict_only_fallback_approves_when_tools_are_hallucinated(tmp_p
 
 
 def test_verdict_only_mode_does_not_trust_tool_calls_for_approval(tmp_path):
-    from devmate.agents.reviewer import review_node
+    from fixora.agents.reviewer import review_node
 
     sandbox, ctx = _sandbox_with_settings(tmp_path)
     try:
@@ -315,7 +315,7 @@ def test_verdict_only_mode_does_not_trust_tool_calls_for_approval(tmp_path):
 
 
 def test_provider_plan_redacts_explicit_keys():
-    from devmate.cli import _provider_plan
+    from fixora.cli import _provider_plan
 
     settings = _settings(llm_providers=(
         "groq1|https://api.groq.com/openai/v1|secret-key-1|openai/gpt-oss-120b,"
@@ -327,7 +327,7 @@ def test_provider_plan_redacts_explicit_keys():
 
 
 def test_explicit_provider_entry_requires_model_without_echoing_key():
-    from devmate import llm
+    from fixora import llm
 
     settings = _settings(llm_providers=
         "groq1|https://api.groq.com/openai/v1|secret-key-should-not-appear|")

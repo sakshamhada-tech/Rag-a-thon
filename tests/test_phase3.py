@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-import devmate.runner as runner_module
-from devmate.api import app
-from devmate.demos import DEMOS, list_demos, prepare_demo
-from devmate.events import EventEmitter
-from devmate.runner import RunManager, RunRecord
+import fixora.runner as runner_module
+from fixora.api import app
+from fixora.demos import DEMOS, list_demos, prepare_demo
+from fixora.events import EventEmitter
+from fixora.runner import RunManager, RunRecord
 from fastapi.testclient import TestClient
 
 
@@ -58,7 +58,7 @@ def test_prepare_demo_copies_to_temp_and_ignores_secret_files(tmp_path, monkeypa
         assert source != Path(__file__).resolve().parent.parent / "demo_repo"
         assert (source / "app.py").exists() or any(source.iterdir())
     finally:
-        assert parent.name.startswith("devmate-demo-")
+        assert parent.name.startswith("fixora-demo-")
         shutil.rmtree(parent)
 
 
