@@ -384,7 +384,7 @@ def _build_one(provider: str, settings):
 def _parse_chain(raw: str, settings) -> list:
     """Parse LLM_PROVIDERS: comma-separated bare names or 'label|base_url|key|model' entries."""
     clients = []
-    for entry in raw.split(","):
+    for index, entry in enumerate(raw.split(","), start=1):
         entry = entry.strip()
         if not entry:
             continue
@@ -393,13 +393,17 @@ def _parse_chain(raw: str, settings) -> list:
             clients.append(_build_one(parts[0], settings))
         elif len(parts) == 4:
             label, base_url, key, model = parts
+            if not label or not base_url or not key or not model:
+                raise LLMError(
+                    f"Malformed LLM_PROVIDERS entry {index}: expected non-empty "
+                    "label|base_url|key|model (one line; no line breaks)")
             clients.append(OpenAIClient(key, model, base_url=base_url,
                                         provider_label=label,
                                         key_hint=f"key for {label}",
                                         max_retries=2))
         else:
-            raise LLMError(f"Malformed LLM_PROVIDERS entry {entry!r} "
-                           "(expected 'name' or 'label|base_url|key|model')")
+            raise LLMError(f"Malformed LLM_PROVIDERS entry {index}: expected "
+                           "'name' or 'label|base_url|key|model'")
     return clients
 
 

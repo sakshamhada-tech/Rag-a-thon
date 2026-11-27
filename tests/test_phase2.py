@@ -312,3 +312,26 @@ def test_verdict_only_mode_does_not_trust_tool_calls_for_approval(tmp_path):
         assert result["review"]["risk"] == "high"
     finally:
         sandbox.cleanup()
+
+
+def test_provider_plan_redacts_explicit_keys():
+    from devmate.cli import _provider_plan
+
+    settings = _settings(llm_providers=(
+        "groq1|https://api.groq.com/openai/v1|secret-key-1|openai/gpt-oss-120b,"
+        "groq2|https://api.groq.com/openai/v1|secret-key-2|openai/gpt-oss-120b"))
+    plan = _provider_plan(settings)
+    assert plan == "groq1,groq2"
+    assert "secret-key" not in plan
+    assert "gpt-oss-120b" not in plan
+
+
+def test_explicit_provider_entry_requires_model_without_echoing_key():
+    from devmate import llm
+
+    settings = _settings(llm_providers=
+        "groq1|https://api.groq.com/openai/v1|secret-key-should-not-appear|")
+    with pytest.raises(LLMError) as excinfo:
+        llm.get_llm(settings)
+    assert "secret-key-should-not-appear" not in str(excinfo.value)
+    assert "model" in str(excinfo.value)

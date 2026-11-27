@@ -137,6 +137,10 @@ XAI_BASE_URL=https://api.x.ai/v1
 
 `.env` is gitignored; never commit your Grok key.
 
+Config safety: `LLM_PROVIDERS` entries are printed as labels only (for example
+`groq1,groq2`); API keys are never printed at startup. Put all explicit entries
+on one physical `.env` line with a non-empty model.
+
 ## FastAPI server
 
 ```bash

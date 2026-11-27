@@ -51,7 +51,7 @@ def main(argv=None) -> int:
 
     manager = RunManager()
     print(f"[START] repo={args.repo} max_attempts={settings.max_attempts} "
-          f"llm_providers={settings.llm_providers or settings.llm_provider}")
+          f"llm_providers={_provider_plan(settings)}")
     try:
         record = manager.run_blocking(args.repo, args.task,
                                       max_attempts=settings.max_attempts, printer=print)
@@ -67,6 +67,19 @@ def main(argv=None) -> int:
         print(f"[LOG] run log saved to {record.log_file}")
     print(f"[DONE] exit={exit_code} status={record.status}")
     return exit_code
+
+
+def _provider_plan(settings) -> str:
+    """Show provider labels only; never print API keys from LLM_PROVIDERS."""
+    raw = (getattr(settings, "llm_providers", "") or "").strip()
+    if not raw:
+        return settings.llm_provider
+    labels = []
+    for entry in raw.split(","):
+        parts = [part.strip() for part in entry.split("|")]
+        label = parts[0] if parts else ""
+        labels.append(label or "invalid-entry")
+    return ",".join(labels)
 
 
 def _finish(manager: RunManager, record, approved: bool) -> int:
