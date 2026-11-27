@@ -127,6 +127,25 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 ## Status
 
+### Done (Phase 5)
+
+- [x] Local, offline RAG (`fixora/rag.py`): BM25 retrieval over 30-line
+  line-window chunks with 10-line overlap; snake_case/camelCase/digit-aware
+  tokeniser; path/line-aware output; index auto-rebuild on any repo change
+  (signature by relpath+mtime+size); no embeddings/network/keys/extra deps.
+- [x] Retrieval grounds the loop: top chunks (k=4 analyse, k=5 plan/fix) are
+  injected into the prompt, a `retrieve_code` tool is available in analyse,
+  plan and fix phases, and every retrieval is logged as a `rag` step for the
+  timeline. `FIXORA_RAG=0` disables it.
+- [x] Deterministic mock hardened: file-selection heuristics now read tool
+  outputs only (retrieval blocks in instructions can no longer steer target
+  selection) — all four demos reach `awaiting_approval` with RAG on (2 attempts
+  for import/hard demos, 1 for swiftcart/syntax).
+- [x] RAG end-to-end verified offline (mock): retrieval module units, tool
+  round-trip, prompt injection assertions, edit-invalidation test; full suite
+  134 passing. Neural semantic embeddings deliberately NOT claimed; upgrade path
+  documented.
+
 ### Done (Phase 4)
 
 - [x] Failure taxonomy (`fixora/diagnostics.py`): classifies real pytest output into `syntax_error`, `dependency_missing`, `import_error`, `collection_error`, `no_tests`, `assertion_failure`, `runtime_error`, `timeout`, `unknown`; never executes the failing code; feeds the fix prompt, run report (`baseline_diagnosis`/`diagnosis`), a `diagnosis` timeline event, and the printer.
@@ -185,7 +204,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `121 passed`.
+- Unit suite: `134 passed` (Phase 5 incl. RAG).
 - Failure-diagnosis end-to-end (mock, offline): `demo_repo_syntax` 1 attempt -> `awaiting_approval`; `demo_repo_import` 2 attempts -> `awaiting_approval`; checked-in fixtures untouched.
 - `install_dependencies` verified end-to-end against a locally built wheel (offline): failing tests diagnosed `dependency_missing`, isolated `pip --target` install, tests then pass. Public PyPI index path unverified.
 - Frontend production build: `npm run build` passes (TypeScript `--noEmit` + Vite).
@@ -206,8 +225,16 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
   public GitHub URL returns 202 and streams SSE events replaying the run;
   local approval covered by unit tests.
 
-### Phase 3/4 known limitations / honestly not verified
+### Phase 3/4/5 known limitations / honestly not verified
 
+- **RAG is lexical** (BM25-style), not neural semantic retrieval: it matches on shared
+  vocabulary (identifiers, test names, error strings), not meaning beyond shared terms.
+  It is free, offline and deterministic; it is not claimed to beat neural embeddings.
+  Real-provider runs with RAG on are unverified — only the deterministic mock was run
+  end-to-end (all four demos reach `awaiting_approval` with retrieval active).
+- The mock is demo-shaped; the 10–15-defect mega-repo is NOT built yet (the `synthetic`
+  fixture option remains open), so multi-bug capability is unproven, not claimed.
+- Docker was not rebuilt with Phase 4/5 changes.
 - The Phase 4 dependency-install happy path against the public PyPI index was **not** exercised from the test suite (tests are offline); it is verified against a locally built wheel + PYTHONPATH round-trip. Real-provider behaviour for the new fixtures is unverified; only the deterministic mock was run end-to-end. Docker was not rebuilt with Phase 4 changes.
 - No real browser was available in this sandbox, so the View Transitions wipe direction, focus traversal, axe/Lighthouse audit, responsive breakpoints and screenshots were **not visually verified**. The CSS implements the specified clip-path directions; initial theme script and reduced-motion fallback follow the brief.
 - Docker was not installed in this sandbox, so `docker build` / `docker run` could not be executed here; the Dockerfile is written but unbuilt locally.

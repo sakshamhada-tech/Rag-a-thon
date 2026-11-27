@@ -283,18 +283,26 @@ class MockClient:
 
         if phase == "fix":
             all_text = "\n".join(str(m.get("content", "")) for m in messages)
+            # File-selection heuristics must read *tool outputs* (thefreshest search/read
+            # evidence), not the whole prompt — otherwise instruction blocks like the RAG
+            # "Relevant code retrieved" section, which cite many .py paths, hijack the
+            # earliest-regex-match and steer the mock at the wrong file.
+            tool_text = "\n".join(str(m.get("content", "")) for m in messages
+                                   if m.get("role") == "tool")
+            evidence = tool_text if tool_text.strip() else all_text
             if "search_code" not in tool_names:
                 return call("search_code", {
                     "pattern": "ROUND_DOWN|ROUND_HALF_EVEN|ROUND_HALF_UP|quantity > 25|import |f\"\$|stock_",
                     "path": ".",
                 })
             if "read_file" not in tool_names:
-                m = (_first_source_hit(all_text, "pricing.py")
-                     or _first_source_hit(all_text, "catalog.py")
-                     or (re.search(r"([\w./-]+\.py):[^\n]*quantity > 25", all_text)
+                m = (_first_source_hit(evidence, "pricing.py")
+                     or _first_source_hit(evidence, "catalog.py")
+                     or (re.search(r"([\w./-]+\.py):[^\n]*quantity > 25", evidence)
                          if "test_rate_applies_at_twentyfive_items" in all_text else None))
-                m = (m or re.search(r"([\w./-]+\.py):[^\n]*(ROUND_HALF_EVEN|ROUND_DOWN)", all_text)
-                     or re.search(r"([\w./-]+\.py):[^\n]*quantity", all_text)
+                m = (m or re.search(r"([\w./-]+\.py):[^\n]*(ROUND_HALF_EVEN|ROUND_DOWN)", evidence)
+                     or re.search(r"([\w./-]+\.py):[^\n]*quantity", evidence)
+                     or re.search(r"([\w./-]+\.py)", evidence)
                      or re.search(r"([\w./-]+\.py)", all_text))
                 target = m.group(1) if m else "swiftcart/money.py"
                 return call("read_file", {"path": target})

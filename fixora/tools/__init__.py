@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-from . import repo_tools, edit_tools, test_tools, dependency_tools
+from . import repo_tools, edit_tools, test_tools, dependency_tools, rag_tools
 
 _PY_TYPES = {"string": str, "integer": int, "number": (int, float),
              "boolean": bool, "object": dict, "array": list}
@@ -124,6 +124,16 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
                  "test_path": {"type": "string", "description": "Optional path, e.g. tests/test_cart.py"}},
               "required": []},
              lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path") or None)),
+        Tool("retrieve_code",
+             "Semantic-ish lexical (BM25) retrieval over the repo. Give it a natural-language query "
+             "(e.g. 'stock_level inventory import error') and it returns the most relevant code chunks "
+             "with paths and line ranges. Cheaper than reading whole files blindly — use it first when "
+             "exploring a large repo or when unsure where something lives.",
+             {"type": "object", "properties": {
+                 "query": {"type": "string", "description": "What to look for"},
+                 "k": {"type": "integer", "description": "Number of chunks (default 5, max 10)"}},
+              "required": ["query"]},
+             lambda a: rag_tools.retrieve_code(sandbox, a["query"], a.get("k") or 5)),
         Tool("install_dependencies",
              "Install the repository's OWN declared dependencies (requirements.txt, or pyproject.toml "
              "[project] dependencies) into an isolated temp directory; pytest then sees them via PYTHONPATH. "

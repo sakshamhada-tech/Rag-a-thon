@@ -313,6 +313,30 @@ There is no safe "skip tests" mode: pytest is the pass/fail signal and runs
 always (baseline + after each fix). Parallelising tool execution is not
 implemented; ordering matters for edits.
 
+## RAG (retrieval-augmented generation)
+
+Fixora now grounds every fix prompt in *retrieval*, not just the file the agent
+happens to read first. This is **lexical RAG, local and free**:
+
+- A BM25-style inverted index is built over line-window chunks of the target
+  repo (skips `.git`, venvs, caches and sensitive paths), stdlib-only, no
+  embeddings, no network, no API keys, no extra dependencies, no per-token cost.
+  It cannot rate-limit or go down; it is rebuilt automatically whenever the repo
+  changes.
+- At analyse, plan and fix time, a block of the most relevant chunks (path,
+  line ranges, BM25 scores) is injected into the prompt. The same retriever is
+  exposed to the agent as the `retrieve_code(query, k)` tool for deeper lookups.
+- The number of retrieved chunks is capped (analyse: 4, plan/fix: 5) and every
+  retrieval is logged as a `rag` step in the run timeline/logs.
+- Disable with `FIXORA_RAG=0`.
+
+Honest limits: this is term-overlap retrieval, not neural semantic search. It is
+deterministic, free and genuinely retrieval-augmented (generation is fed by what
+the index returns), but it does not capture meaning beyond shared vocabulary
+(identifiers, test names, error messages — which is most of what bug fixing uses).
+Upgrading to neural embeddings later means swapping `fixora/rag.py`'s scoring
+function; prompts, tools and events stay the same.
+
 ## Failure taxonomy and dependency errors
 
 Every test run is classified from real pytest output before the agent is asked
@@ -361,7 +385,7 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # unit tests (121 passing)
+python -m pytest tests/                   # unit tests (134 passing)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
 

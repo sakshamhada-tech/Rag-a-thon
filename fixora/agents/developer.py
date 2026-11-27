@@ -12,6 +12,7 @@ import re
 from ..config import MAX_OUTPUT_CHARS
 from ..llm import LLMError
 from ..reasoning import select_reasoning_effort
+from ..rag import retriever_for
 
 _PHASE_ROLES = {"analyse": "Developer", "plan": "Developer", "fix": "Developer", "review": "Reviewer"}
 
@@ -27,11 +28,13 @@ _PHASE_DETAILS = {
     "analyse": ("Explore the repo: list the tree, identify entry points, dependencies and "
                 "where the tests live. Read only — do not modify anything. "
                 "If you find the bug, do NOT patch it here; describe it in the summary.",
-                ["list_tree", "read_file", "search_code", "get_dependencies"]),
+                ["list_tree", "read_file", "search_code", "get_dependencies",
+                 "retrieve_code"]),
     "plan": ("State the suspected root cause and a concrete fix plan. Use search/read tools "
              "to gather evidence first. Read only — do not modify anything. "
              "If you are fairly sure how to fix it, describe the exact edit instead of making it.",
-             ["list_tree", "read_file", "search_code", "get_dependencies"]),
+             ["list_tree", "read_file", "search_code", "get_dependencies",
+              "retrieve_code"]),
     "fix": ("Edit the code to fix the bug using write_file / apply_patch. Prefer small, exact "
             "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
             "if unsure. If the failure diagnosis is dependency_missing and the repo declares "
@@ -119,6 +122,51 @@ def _is_unavailable_tool_error(error: Exception) -> bool:
     return bool(re.search(r"(not in request\.tools|tool call validation failed|attempted to call tool|unknown tool)", text))
 
 
+def _clip(text: str, limit: int = 900) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _rag_query(state: dict) -> str:
+    """Build the retrieval query from everything the run already knows."""
+    parts = [str(state.get("task") or "")]
+    r = state.get("last_test_result") or {}
+    diag = r.get("diagnosis") or {}
+    if diag:
+        parts += [str(diag.get("summary", "")), str(diag.get("module") or ""),
+                  " ".join(str(e) for e in diag.get("exceptions", []))]
+    parts += [str(t) for t in (r.get("failing_tests") or [])[:5]]
+    plan = state.get("plan") or ""
+    if plan:
+        parts.append(str(plan)[:400])
+    return " ".join(p for p in parts if p).strip()
+
+
+def _rag_block(ctx, state: dict, k: int = 5) -> str:
+    """Top-k retrieved chunks to ground the prompt (empty string when disabled/empty)."""
+    import os
+    flag = (os.environ.get("FIXORA_RAG", "1") or "1").strip().lower()
+    if flag in ("0", "false", "off", "no"):
+        return ""
+    query = _rag_query(state)
+    if not query:
+        return ""
+    try:
+        chunks = retriever_for(ctx.sandbox).retrieve(query, k=k)
+    except Exception as e:
+        ctx.log_step("rag", f"retrieval unavailable: {e}")
+        return ""
+    if not chunks:
+        return ""
+    ctx.log_step("rag", f"retrieved {len(chunks)} chunks", query=query[:160],
+                 files=[c["path"] for c in chunks])
+    blocks = []
+    for c in chunks:
+        blocks.append(f"--- {c['path']}:{c['start_line']}-{c['end_line']} "
+                      f"(score {c['score']}) ---\n{_clip(c['text'], 900)}")
+    return ("\n\nRelevant code retrieved from the repo (use as pointers; verify with "
+            "read_file before editing):\n" + "\n\n".join(blocks))
+
+
 def _diagnosis_block(state: dict) -> str:
     """Render the structured diagnosis for prompt context (truncated)."""
     r = state.get("last_test_result") or {}
@@ -151,7 +199,8 @@ def _test_context(state: dict) -> str:
 
 def analyse_node(ctx, state: dict) -> dict:
     instruction = (f"Task: {state['task']}\n\nExplore the repo and write a short repo_summary: "
-                   "layout, entry points, dependencies, where the tests live.")
+                   "layout, entry points, dependencies, where the tests live."
+                   + _rag_block(ctx, state, k=4))
     effort = select_reasoning_effort("analyse", state)
     summary, msgs = run_developer(ctx, "analyse", state, instruction + ctx.already_read_block(),
                                   reasoning_effort=effort)
@@ -162,7 +211,7 @@ def analyse_node(ctx, state: dict) -> dict:
 def plan_node(ctx, state: dict) -> dict:
     instruction = (f"Task: {state['task']}\n\nRepo summary:\n{state.get('repo_summary', '')}\n\n"
                    "State the suspected root cause and the step-by-step fix plan. Do not edit yet."
-                   + ctx.already_read_block())
+                   + _rag_block(ctx, state, k=5) + ctx.already_read_block())
     effort = select_reasoning_effort("plan", state)
     plan, msgs = run_developer(ctx, "plan", state, instruction, reasoning_effort=effort)
     ctx.log_step("plan", "plan ready", plan=plan)
@@ -178,7 +227,7 @@ def fix_node(ctx, state: dict) -> dict:
     ctx.stats["retries"] = max(ctx.stats.get("retries", 0), attempts - 1)
     instruction = (f"Task: {state['task']}\n\nRepo summary:\n{state.get('repo_summary', '')}\n\n"
                    f"Plan:\n{state.get('plan', '')}\n"
-                   f"{_test_context(state)}\n\n"
+                   f"{_test_context(state)}{_rag_block(ctx, state, k=5)}\n\n"
                    f"Attempt {attempts} of {state.get('max_attempts', 3)}. "
                    "Fix the bug now. Do not modify tests."
                    + ctx.already_read_block())
