@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ListChecks, PanelRightOpen, Play, TerminalSquare } from 'lucide-react';
+import { ListChecks, PanelRightOpen, Play, ShieldCheck, TerminalSquare } from 'lucide-react';
 import { api } from './api/client';
 import { streamRun, type StreamHandle } from './api/sse';
 import type { RunStartRequest, RunSummary, ServerConfig } from './api/types';
@@ -142,6 +142,11 @@ export default function App() {
         <button className="bottom-tab" aria-current={mobileTab === 'timeline'} onClick={() => setMobileTab('timeline')}><ListChecks aria-hidden="true" className="icon" />Timeline</button>
         <button className="bottom-tab" aria-current={mobileTab === 'inspector'} onClick={() => setMobileTab('inspector')}><TerminalSquare aria-hidden="true" className="icon" />Inspector</button>
       </nav>
+
+      <footer className="app-footer" role="contentinfo" aria-label="DevMate phase 3 status">
+        <span className="footer-item footer-primary"><ShieldCheck aria-hidden="true" className="icon" /> DevMate · agent workflow with a human approval gate</span>
+        <span className="footer-item footer-right">Sandboxed workspace · nothing is applied until approval · logs stay in <span className="mono">logs/</span></span>
+      </footer>
     </div>
   );
 }

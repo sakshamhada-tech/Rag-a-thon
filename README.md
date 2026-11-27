@@ -187,8 +187,9 @@ Set `VITE_API_PROXY_TARGET` from a shell if the API is not on port 8000.
 
 ### Key UI behaviour
 
-- Three regions on desktop, inspector collapsible; slide-over on tablet; bottom
-  tab bar on small screens.
+- Fixed-height app shell (`100dvh`) with internal scroll regions for setup/history,
+  timeline and inspector; no page-level growth when panels are full. Compact footer
+  reports product phase and the approval gate.
 - SSE replay/live stream uses event sequence ids and `Last-Event-ID`; the reducer
   dedupes by `seq`.
 - Diff is rendered by a custom unified-diff parser; tests/review/log tabs show

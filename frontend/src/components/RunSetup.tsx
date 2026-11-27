@@ -61,7 +61,7 @@ export function RunSetup({ status, onStart }: Props) {
   }
 
   return (
-    <section aria-labelledby="run-setup-title">
+    <section className="run-setup" aria-labelledby="run-setup-title">
       <h2 id="run-setup-title" className="panel-title">Run setup</h2>
       <form onSubmit={handleSubmit}>
         <fieldset style={{ border: 0, padding: 0, margin: 0 }}>

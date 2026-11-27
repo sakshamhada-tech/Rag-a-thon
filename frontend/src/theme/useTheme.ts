@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { applyTheme, getStoredThemePreference, resolveTheme, storeThemePreference, transitionTheme, type ThemeName } from './themeTransition';
 
 function initialTheme(): ThemeName {
@@ -15,15 +16,15 @@ export function useTheme() {
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((current) => {
-      const next: ThemeName = current === 'dark' ? 'light' : 'dark';
-      transitionTheme(next, () => {
-        applyTheme(next);
-        storeThemePreference(next);
-      });
-      return next;
+    const next: ThemeName = theme === 'dark' ? 'light' : 'dark';
+    transitionTheme(next, () => {
+      // Commit React state and the data-theme attribute together, inside the
+      // view-transition callback, so the captured "new" snapshot is complete.
+      flushSync(() => setTheme(next));
+      applyTheme(next);
+      storeThemePreference(next);
     });
-  }, []);
+  }, [theme]);
 
   return { theme, toggleTheme };
 }

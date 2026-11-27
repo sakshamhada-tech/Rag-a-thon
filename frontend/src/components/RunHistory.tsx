@@ -21,7 +21,7 @@ function formatDuration(s: number) { return s < 60 ? `${s.toFixed(1)}s` : `${Mat
 
 export function RunHistory({ runs, currentRunId, onSelect, loading, error }: Props) {
   return (
-    <section aria-labelledby="run-history-title" style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <section className="run-history-section" aria-labelledby="run-history-title">
       <h2 id="run-history-title" className="panel-title">Run history</h2>
       {error && <div className="error-text" role="status">{error}</div>}
       {loading && runs.length === 0 ? <div className="muted" aria-busy="true">Loading runs…</div> : null}

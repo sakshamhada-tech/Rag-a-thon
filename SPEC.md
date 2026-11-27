@@ -131,7 +131,7 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 - [x] Backend additions: `GET /demos`, `GET /config` (provider/model only), demo runs via `POST /runs {demo_id, task}` with checked-in fixtures untouched (temp copy, patch-only approval), lightweight `GET /runs` summaries, SSE event sequence ids + `Last-Event-ID` replay filter.
 - [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `DEVMATE_API_TOKEN` is set, API routes remain protected.
-- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
+- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; fixed-height shell with internal scroll regions; compact footer; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
 - [x] Dockerfile (Node build stage + slim Python runtime with git) and `.dockerignore`.
 - [x] Backend tests extended to 97 passing; frontend `npm run build` passes.
 
