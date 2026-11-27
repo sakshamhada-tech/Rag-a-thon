@@ -1,0 +1,142 @@
+"""Reviewer agent: gate after a passing test run.
+
+Input: task, plan, unified diff, test results. Uses read-only tools to inspect
+changed code. Output strict JSON: {"verdict", "issues", "risk", "summary"}.
+
+Hard rule enforced in CODE (not just the prompt): any change under tests/ is
+flagged, and if assertions or test functions were removed/loosened the review is
+forced to reject — the agent must never weaken the suite to make it pass.
+"""
+from __future__ import annotations
+
+import json
+import re
+
+from ..llm import LLMError
+from .developer import run_developer
+
+def review_node(ctx, state: dict) -> dict:
+    diff = ctx.sandbox.diff()
+    hard_issues = _tests_weakened(diff)
+    if hard_issues:
+        review = {
+            "verdict": "reject",
+            "issues": ["HARD RULE: " + issue for issue in hard_issues],
+            "risk": "high",
+            "summary": ("Rejected by code-enforced rule: the diff touches tests/ and removes or "
+                        "loosens assertions/tests. Fix the source, not the suite."),
+        }
+        ctx.printer(f"[REVIEW] verdict=reject risk=high issues={len(hard_issues)} (hard rule: tests touched)")
+        ctx.emitter.emit("review_verdict", **review)
+        ctx.log_step("review", "hard rule reject: tests modified", issues=hard_issues)
+        return {"review": review, "diff": diff,
+                "messages": state.get("messages", []) + [_issue_message(review)]}
+
+    instruction = (
+        f"Task: {state['task']}\n\nPlan:\n{state.get('plan', '')}\n\n"
+        f"Last test result: passed={state.get('last_test_result', {}).get('passed')} "
+        f"failed={state.get('last_test_result', {}).get('failed')}\n\n"
+        f"Unified diff to review:\n```diff\n{diff}\n```\n\n"
+        "Review the change and answer with the strict JSON verdict. "
+        "Do not re-read files you already have.")
+    try:
+        text, msgs = run_developer(ctx, "review", state, instruction, reasoning_effort="medium")
+    except LLMError as e:
+        # Reviewer unavailable: do not auto-approve consequential changes.
+        review = {"verdict": "reject",
+                  "issues": [f"reviewer unavailable: {e}"],
+                  "risk": "high",
+                  "summary": "Reviewer failed; refusing to auto-approve. Fix and re-review."}
+        ctx.printer(f"[REVIEW] verdict=reject (reviewer error: {e})")
+        ctx.emitter.emit("review_verdict", **review)
+        ctx.log_step("review", "reviewer error", error=str(e))
+        return {"review": review, "diff": diff,
+                "messages": state.get("messages", []) + [_issue_message(review)]}
+
+    review = _parse_review(text)
+    ctx.printer(f"[REVIEW] verdict={review['verdict']} risk={review['risk']} "
+                f"issues={len(review['issues'])}")
+    ctx.emitter.emit("review_verdict", **review)
+    ctx.log_step("review", f"verdict={review['verdict']}", verdict=review["verdict"],
+                 risk=review["risk"], issues=review["issues"])
+    messages = list(state.get("messages", [])) + msgs
+    if review["verdict"] == "reject":
+        messages.append(_issue_message(review))
+    return {"review": review, "diff": diff, "messages": messages}
+
+
+# ------------------------------------------------------------------- internals
+
+def _issue_message(review: dict) -> dict:
+    issues = "\n".join(f"- {i}" for i in review.get("issues", [])) or "(no details)"
+    return {"role": "user", "content":
+            f"The reviewer REJECTED the previous fix. Issues:\n{issues}\n"
+            "Address these in your next fix. Do not weaken or delete tests."}
+
+
+_ASSERT_RE = re.compile(r"(\bassert\b|def test_|pytest\.|\.raises\b|\.warns\b)")
+
+
+def _tests_weakened(diff: str) -> list[str]:
+    """Detect removed/loosened assertions or deleted test files in the diff."""
+    issues: list[str] = []
+    current_file: str | None = None
+    for line in diff.splitlines():
+        if line.startswith("+++ /dev/null"):
+            if current_file and _is_test_path(current_file):
+                issues.append(f"test file deleted: {current_file}")
+            continue
+        if line.startswith("+++ b/"):
+            current_file = line[len("+++ b/"):].strip()
+            continue
+        if line.startswith("--- a/"):
+            current_file = current_file or line[len("--- a/"):].strip()
+            continue
+        if current_file and _is_test_path(current_file):
+            if line.startswith("-") and not line.startswith("---"):
+                content = line[1:].strip()
+                if _ASSERT_RE.search(content):
+                    issues.append(f"removed/loosened test code in {current_file}: {content[:140]}")
+    return issues
+
+
+def _is_test_path(path: str) -> bool:
+    parts = path.split("/")
+    return ("tests" in parts or "test" in parts
+            or path.startswith("test_") or "/test_" in path)
+
+
+def _parse_review(text: str) -> dict:
+    """Extract and validate the reviewer's strict-JSON verdict."""
+    payload = None
+    candidate = (text or "").strip()
+    try:
+        payload = json.loads(candidate)
+    except ValueError:
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", candidate):
+            try:
+                payload, _ = decoder.raw_decode(candidate[match.start():])
+                break
+            except ValueError:
+                continue
+    if not isinstance(payload, dict):
+        return {"verdict": "reject",
+                "issues": ["reviewer returned no valid JSON verdict"],
+                "risk": "high",
+                "summary": "Could not parse reviewer output; refusing to auto-approve."}
+    verdict = str(payload.get("verdict", "reject")).lower().strip()
+    if verdict not in {"approve", "reject"}:
+        verdict = "reject"
+    issues = payload.get("issues", [])
+    if not isinstance(issues, list):
+        issues = [str(issues)]
+    risk = str(payload.get("risk", "medium")).lower().strip()
+    if risk == "med":
+        risk = "medium"
+    if risk not in {"low", "medium", "high"}:
+        risk = "medium"
+    return {"verdict": verdict,
+            "issues": [str(i) for i in issues][:20],
+            "risk": risk,
+            "summary": str(payload.get("summary", ""))[:2000]}

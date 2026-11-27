@@ -25,6 +25,11 @@ def _settings():
         max_attempts=3,
         command_timeout=60,
         max_tool_steps=5,
+        llm_providers="",
+        run_timeout=900,
+        clone_timeout=120,
+        max_repo_mb=50,
+        read_cache_chars=24000,
     )
 
 
@@ -39,7 +44,7 @@ def ctx(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        def chat(self, messages, tools):
+        def chat(self, messages, tools, reasoning_effort=None):
             self.calls += 1
             if self.calls == 1:
                 raise LLMError("Error code: 400 - Tool call validation failed: "
@@ -72,7 +77,7 @@ def test_non_tool_llm_error_raises(tmp_path):
     sb = Sandbox(repo)
 
     class BadLLM:
-        def chat(self, messages, tools):
+        def chat(self, messages, tools, reasoning_effort=None):
             raise LLMError("Error code: 401 - invalid api key")
 
     try:

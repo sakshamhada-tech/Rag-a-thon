@@ -29,6 +29,11 @@ class Settings:
     max_attempts: int
     command_timeout: int
     max_tool_steps: int
+    llm_providers: str          # raw LLM_PROVIDERS chain, e.g. "groq,openai" or explicit triples
+    run_timeout: int            # overall wall-clock cap for one run (API background task)
+    clone_timeout: int          # git clone timeout for GitHub URLs
+    max_repo_mb: int            # refuse to clone repos larger than this
+    read_cache_chars: int       # cap on already-read file contents passed into prompts
 
 
 def load_settings() -> Settings:
@@ -53,4 +58,9 @@ def load_settings() -> Settings:
         max_attempts=int(os.getenv("MAX_ATTEMPTS", "3")),
         command_timeout=int(os.getenv("COMMAND_TIMEOUT", "60")),
         max_tool_steps=int(os.getenv("MAX_TOOL_STEPS", "12")),
+        llm_providers=os.getenv("LLM_PROVIDERS", "").strip(),
+        run_timeout=int(os.getenv("RUN_TIMEOUT", "900")),
+        clone_timeout=int(os.getenv("CLONE_TIMEOUT", "120")),
+        max_repo_mb=int(os.getenv("MAX_REPO_MB", "50")),
+        read_cache_chars=int(os.getenv("READ_CACHE_CHARS", "24000")),
     )

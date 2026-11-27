@@ -21,6 +21,11 @@ def _settings(provider: str, **overrides) -> Settings:
         max_attempts=3,
         command_timeout=60,
         max_tool_steps=12,
+        llm_providers="",
+        run_timeout=900,
+        clone_timeout=120,
+        max_repo_mb=50,
+        read_cache_chars=24000,
     )
     base.update(overrides)
     return Settings(**base)

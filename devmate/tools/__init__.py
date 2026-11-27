@@ -1,7 +1,9 @@
 """Tool registry: JSON schemas for the LLM plus a safe executor.
 
 Every tool returns a JSON string; errors are payloads ({"error": ...}),
-never raised exceptions. Tool calls are size-limited by the tools themselves.
+never raised exceptions. Arguments are validated against the declared schema —
+bad args come back as a clear {"error": ...} payload so the model can correct
+itself instead of crashing the run.
 """
 from __future__ import annotations
 
@@ -10,6 +12,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import repo_tools, edit_tools, test_tools
+
+_PY_TYPES = {"string": str, "integer": int, "number": (int, float),
+             "boolean": bool, "object": dict, "array": list}
 
 
 @dataclass
@@ -23,11 +28,46 @@ class Tool:
         return {"name": self.name, "description": self.description,
                 "parameters": self.parameters}
 
-    def run(self, args: dict) -> str:
+    def run(self, args) -> str:
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            return json.dumps({"error": f"{self.name}: arguments must be a JSON object, "
+                                        f"got {type(args).__name__}"})
+        error = self.validate(args)
+        if error:
+            return json.dumps({"error": error})
         try:
-            return self.fn(args or {})
+            return self.fn(args)
         except Exception as e:  # belt and braces: tools should not raise
             return json.dumps({"error": f"{self.name} failed: {e}"})
+
+    def validate(self, args: dict) -> str | None:
+        """Type-check declared params; extras (aliases) are allowed and ignored."""
+        props = self.parameters.get("properties", {})
+        for key, spec in props.items():
+            if key not in args:
+                continue
+            value = args[key]
+            expected = _PY_TYPES.get(spec.get("type"))
+            if expected is None:
+                continue
+            if spec["type"] == "integer" and isinstance(value, bool):
+                return f"{self.name}: argument '{key}' must be an integer, got boolean"
+            if not isinstance(value, expected):
+                return (f"{self.name}: argument '{key}' must be of type {spec['type']}, "
+                        f"got {type(value).__name__}")
+        for key in self.parameters.get("required", []):
+            if key not in args or args[key] is None:
+                return f"{self.name}: missing required argument '{key}'"
+        return None
+
+
+def _alias(args: dict, *names, default=None):
+    for name in names:
+        if name in args and args[name] is not None:
+            return args[name]
+    return default
 
 
 def build_tools(sandbox, settings) -> dict[str, Tool]:
@@ -39,7 +79,7 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
                  "path": {"type": "string", "description": "Relative dir, default '.'"},
                  "max_depth": {"type": "integer", "description": "Tree depth, default 3, max 6"}},
               "required": []},
-             lambda a: repo_tools.list_tree(sandbox, a.get("path", "."), a.get("max_depth", 3))),
+             lambda a: repo_tools.list_tree(sandbox, a.get("path") or ".", a.get("max_depth") or 3)),
         Tool("read_file",
              "Read a file with 1-based line numbers. Optional start_line/end_line.",
              {"type": "object", "properties": {
@@ -47,16 +87,17 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
                  "start_line": {"type": "integer"},
                  "end_line": {"type": "integer"}},
               "required": ["path"]},
+             # aliases tolerated for robustness: line_start/start, line_end/end
              lambda a: repo_tools.read_file(sandbox, a["path"],
-                                            a.get("start_line", a.get("line_start")),
-                                            a.get("end_line", a.get("line_end")))),
+                                            _alias(a, "start_line", "line_start", "start"),
+                                            _alias(a, "end_line", "line_end", "end"))),
         Tool("search_code",
              "Regex search across repo text files. Returns 'path:line: snippet', capped.",
              {"type": "object", "properties": {
                  "pattern": {"type": "string", "description": "Python regex"},
                  "path": {"type": "string", "description": "Relative dir/file, default '.'"}},
               "required": ["pattern"]},
-             lambda a: repo_tools.search_code(sandbox, a["pattern"], a.get("path", "."))),
+             lambda a: repo_tools.search_code(sandbox, a["pattern"], a.get("path") or ".")),
         Tool("get_dependencies",
              "Parse requirements.txt / pyproject.toml and collect top-level imports.",
              {"type": "object", "properties": {}, "required": []},
@@ -81,6 +122,6 @@ def build_tools(sandbox, settings) -> dict[str, Tool]:
              {"type": "object", "properties": {
                  "test_path": {"type": "string", "description": "Optional path, e.g. tests/test_cart.py"}},
               "required": []},
-             lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path"))),
+             lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path") or None)),
     ]
     return {t.name: t for t in tools}

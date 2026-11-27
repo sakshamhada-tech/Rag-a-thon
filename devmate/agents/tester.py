@@ -23,6 +23,8 @@ def test_node(ctx, state: dict) -> dict:
     p, f_, e = result.get("passed", 0), result.get("failed", 0), result.get("errors", 0)
     ctx.printer(f"[TEST] status={result.get('status')} passed={p} failed={f_} errors={e}"
                 + (f" failing={', '.join(result.get('failing_tests', []))}" if f_ or e else ""))
+    ctx.emitter.emit("test_result", **{k: result.get(k) for k in
+                                       ("status", "passed", "failed", "errors", "failing_tests")})
     if not state.get("baseline_test_result"):
         return {"last_test_result": result, "baseline_test_result": result}
     return {"last_test_result": result}
