@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Run logs (keep directory, ignore contents)
+logs/*.json
+
+# Sandbox scratch
+/tmp/

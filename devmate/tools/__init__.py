@@ -1,0 +1,84 @@
+"""Tool registry: JSON schemas for the LLM plus a safe executor.
+
+Every tool returns a JSON string; errors are payloads ({"error": ...}),
+never raised exceptions. Tool calls are size-limited by the tools themselves.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Callable
+
+from . import repo_tools, edit_tools, test_tools
+
+
+@dataclass
+class Tool:
+    name: str
+    description: str
+    parameters: dict
+    fn: Callable[[dict], str]
+
+    def schema(self) -> dict:
+        return {"name": self.name, "description": self.description,
+                "parameters": self.parameters}
+
+    def run(self, args: dict) -> str:
+        try:
+            return self.fn(args or {})
+        except Exception as e:  # belt and braces: tools should not raise
+            return json.dumps({"error": f"{self.name} failed: {e}"})
+
+
+def build_tools(sandbox, settings) -> dict[str, Tool]:
+    """Bind all Phase 1 tools to a sandbox instance."""
+    tools = [
+        Tool("list_tree",
+             "List the file tree of the repo (or a subdirectory).",
+             {"type": "object", "properties": {
+                 "path": {"type": "string", "description": "Relative dir, default '.'"},
+                 "max_depth": {"type": "integer", "description": "Tree depth, default 3, max 6"}},
+              "required": []},
+             lambda a: repo_tools.list_tree(sandbox, a.get("path", "."), a.get("max_depth", 3))),
+        Tool("read_file",
+             "Read a file with 1-based line numbers. Optional start_line/end_line.",
+             {"type": "object", "properties": {
+                 "path": {"type": "string"},
+                 "start_line": {"type": "integer"},
+                 "end_line": {"type": "integer"}},
+              "required": ["path"]},
+             lambda a: repo_tools.read_file(sandbox, a["path"], a.get("start_line"), a.get("end_line"))),
+        Tool("search_code",
+             "Regex search across repo text files. Returns 'path:line: snippet', capped.",
+             {"type": "object", "properties": {
+                 "pattern": {"type": "string", "description": "Python regex"},
+                 "path": {"type": "string", "description": "Relative dir/file, default '.'"}},
+              "required": ["pattern"]},
+             lambda a: repo_tools.search_code(sandbox, a["pattern"], a.get("path", "."))),
+        Tool("get_dependencies",
+             "Parse requirements.txt / pyproject.toml and collect top-level imports.",
+             {"type": "object", "properties": {}, "required": []},
+             lambda a: repo_tools.get_dependencies(sandbox)),
+        Tool("write_file",
+             "Write a new file or fully overwrite an existing one (relative path).",
+             {"type": "object", "properties": {
+                 "path": {"type": "string"},
+                 "content": {"type": "string"}},
+              "required": ["path", "content"]},
+             lambda a: edit_tools.write_file(sandbox, a["path"], a["content"])),
+        Tool("apply_patch",
+             "Exact-match replace in a file. Fails unless old_str occurs exactly once.",
+             {"type": "object", "properties": {
+                 "path": {"type": "string"},
+                 "old_str": {"type": "string"},
+                 "new_str": {"type": "string"}},
+              "required": ["path", "old_str", "new_str"]},
+             lambda a: edit_tools.apply_patch(sandbox, a["path"], a["old_str"], a["new_str"])),
+        Tool("run_tests",
+             "Run pytest in the workspace. Returns pass/fail counts, failing test names and trimmed output.",
+             {"type": "object", "properties": {
+                 "test_path": {"type": "string", "description": "Optional path, e.g. tests/test_cart.py"}},
+              "required": []},
+             lambda a: test_tools.run_tests(sandbox, settings, a.get("test_path"))),
+    ]
+    return {t.name: t for t in tools}
