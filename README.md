@@ -25,7 +25,7 @@ baseline test → analyse → plan → fix ⇄ test → report
   `write_file`, `apply_patch` (exact match, must be unique), `run_tests`
   (real pytest output — never the LLM's claim).
 - **LLM**: provider-agnostic wrapper with native tool calling.
-  `LLM_PROVIDER=xai` (Grok), `anthropic` or `openai`; keys/models from `.env`.
+  `LLM_PROVIDER=groq` (Groq Cloud, free tier), `xai` (Grok), `anthropic` or `openai`; keys/models from `.env`.
 - The full run (steps, tool calls, results) is logged to `logs/<timestamp>.json`.
 
 ## Setup
@@ -44,6 +44,28 @@ python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
 ```
 
 Exit code is `0` if the tests pass at the end, else `1`.
+
+### Use Groq Cloud (free tier)
+
+Groq (`groq.com`) is **not** the same as xAI Grok. Its API is OpenAI-compatible.
+
+```bash
+# .env
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk-your-free-tier-key-here
+GROQ_MODEL=llama-3.3-70b-versatile   # must be a tool-calling model enabled for your account
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+# Optional: lower this if the free tier rate-limits you
+MAX_TOOL_STEPS=8
+```
+
+Then run:
+
+```bash
+python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
+```
+
+Free-tier notes: requests are rate-limited per minute; the client uses extra SDK retries, but sustained 429s will surface as `[LLM error] groq API error: ...` inside the run. Pick a currently enabled tool-calling model from your Groq console if the default is unavailable. `.env` is gitignored; never commit your key.
 
 ### Use Grok (xAI)
 
@@ -82,7 +104,7 @@ Note: the run above used `LLM_PROVIDER=mock`, a deterministic offline
 provider that scripts read → locate → patch with **no LLM involved**. It exists
 only to smoke-test the pipeline (sandbox, tools, graph routing, logs, exit
 codes) on machines without API access. Real autonomous behaviour requires
-`LLM_PROVIDER=anthropic` or `openai` with a valid key.
+`LLM_PROVIDER=groq`, `xai`, `anthropic` or `openai` with a valid key.
 
 ## Verify
 

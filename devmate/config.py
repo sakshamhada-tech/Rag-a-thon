@@ -23,6 +23,9 @@ class Settings:
     xai_api_key: str | None
     xai_model: str
     xai_base_url: str
+    groq_api_key: str | None
+    groq_model: str
+    groq_base_url: str
     max_attempts: int
     command_timeout: int
     max_tool_steps: int
@@ -41,6 +44,11 @@ def load_settings() -> Settings:
         # Set XAI_MODEL to the exact Grok model enabled for your xAI account.
         xai_model=os.getenv("XAI_MODEL", "grok-4-latest"),
         xai_base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+        groq_api_key=os.getenv("GROQ_API_KEY") or None,
+        # Groq Cloud is OpenAI-compatible. Pick a tool-calling model enabled in
+        # your account; llama-3.3-70b-versatile is a common free-tier choice.
+        groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_base_url=os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         max_attempts=int(os.getenv("MAX_ATTEMPTS", "3")),
         command_timeout=int(os.getenv("COMMAND_TIMEOUT", "60")),
         max_tool_steps=int(os.getenv("MAX_TOOL_STEPS", "12")),

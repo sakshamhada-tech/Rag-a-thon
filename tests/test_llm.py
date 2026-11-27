@@ -15,6 +15,9 @@ def _settings(provider: str, **overrides) -> Settings:
         xai_api_key=None,
         xai_model="grok-4-latest",
         xai_base_url="https://api.x.ai/v1",
+        groq_api_key=None,
+        groq_model="llama-3.3-70b-versatile",
+        groq_base_url="https://api.groq.com/openai/v1",
         max_attempts=3,
         command_timeout=60,
         max_tool_steps=12,
@@ -44,3 +47,16 @@ def test_xai_selects_openai_compatible_client():
 
 def test_mock_still_available():
     assert isinstance(get_llm(_settings("mock")), MockClient)
+
+
+def test_groq_requires_api_key():
+    with pytest.raises(LLMError) as exc:
+        get_llm(_settings("groq"))
+    assert "GROQ_API_KEY" in str(exc.value)
+
+
+def test_groq_selects_openai_compatible_client():
+    client = get_llm(_settings("groq", groq_api_key="gsk-test", groq_model="test-tool-model"))
+    assert isinstance(client, OpenAIClient)
+    assert client.model == "test-tool-model"
+    assert client.provider_label == "groq"

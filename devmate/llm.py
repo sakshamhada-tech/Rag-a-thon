@@ -1,9 +1,9 @@
 """Provider-agnostic LLM client with native tool/function calling.
 
-Supports Anthropic, OpenAI and Grok/xAI (OpenAI-compatible API) via
-LLM_PROVIDER. Also provides a deterministic offline provider `mock` used ONLY
-to smoke-test the agent pipeline without network access — it does no real
-reasoning and must not be used in production.
+Supports Anthropic, OpenAI, xAI/Grok and Groq Cloud (both via OpenAI-compatible
+APIs) via LLM_PROVIDER. Also provides a deterministic offline provider `mock`
+used ONLY to smoke-test the agent pipeline without network access — it does
+no real reasoning and must not be used in production.
 
 Internal message format (neutral dicts, OpenAI-flavoured):
   {"role": "system"|"user", "content": str}
@@ -97,11 +97,13 @@ class AnthropicClient:
 
 class OpenAIClient:
     def __init__(self, api_key: str | None, model: str, *, base_url: str | None = None,
-                 provider_label: str = "openai", key_hint: str = "OPENAI_API_KEY"):
+                 provider_label: str = "openai", key_hint: str = "OPENAI_API_KEY",
+                 max_retries: int = 2):
         if not api_key:
             raise LLMError(f"LLM_PROVIDER={provider_label} but {key_hint} is not set (see .env.example)")
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+        self.client = (OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
+                       if base_url else OpenAI(api_key=api_key, max_retries=max_retries))
         self.model = model
         self.provider_label = provider_label
 
@@ -238,6 +240,13 @@ def get_llm(settings):
         return OpenAIClient(settings.xai_api_key, settings.xai_model,
                             base_url=settings.xai_base_url,
                             provider_label="xai", key_hint="XAI_API_KEY")
+    if provider == "groq":
+        # Groq Cloud exposes an OpenAI-compatible chat-completions API.
+        # A few extra retries help absorb free-tier rate limits.
+        return OpenAIClient(settings.groq_api_key, settings.groq_model,
+                            base_url=settings.groq_base_url,
+                            provider_label="groq", key_hint="GROQ_API_KEY",
+                            max_retries=4)
     if provider == "mock":
         return MockClient()
-    raise LLMError(f"Unknown LLM_PROVIDER={provider!r} (expected 'anthropic', 'openai', 'xai' or 'mock')")
+    raise LLMError(f"Unknown LLM_PROVIDER={provider!r} (expected 'anthropic', 'openai', 'xai', 'groq' or 'mock')")

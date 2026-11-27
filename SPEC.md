@@ -56,10 +56,11 @@ produces the unified diff via `difflib`.
 replacement and fails unless `old_str` occurs exactly once.
 
 **LLM wrapper** (`llm.py`): neutral internal message format; native tool/function
-calling. `AnthropicClient` (messages API + `tool_use` blocks) and `OpenAIClient`
-(chat.completions + `tools`) selected by `LLM_PROVIDER`; model/keys from `.env`.
-`MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline provider for
-pipeline smoke tests only — no LLM, no reasoning.
+calling. `AnthropicClient` (messages API + `tool_use` blocks), `OpenAIClient`
+(chat.completions + `tools`), Grok/xAI and Groq Cloud (both via `OpenAIClient`
+with `XAI_BASE_URL` / `GROQ_BASE_URL`) selected by `LLM_PROVIDER`; model/keys
+from `.env`. `MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline
+provider for pipeline smoke tests only — no LLM, no reasoning.
 
 **Demo repo** (`demo_repo/`, "swiftcart"): shopping-cart / bulk-discount
 calculator, stdlib-only, 14 tests. Exactly 3 tests fail on one planted logic
@@ -80,7 +81,7 @@ agent must fix the source.
       `write_file`, `apply_patch` (unique-anchor), `run_tests` (parsed output)
 - [x] LangGraph loop: baseline → analyse → plan → fix → test → decide → report,
       with retry on failing tests and `max_attempts` budget
-- [x] Provider-agnostic LLM wrapper (Anthropic + OpenAI + Grok/xAI) with native tool calling
+- [x] Provider-agnostic LLM wrapper (Anthropic + OpenAI + Grok/xAI + Groq Cloud) with native tool calling
 - [x] CLI with live step printing, JSON run logs, exit code 0/1
 - [x] Demo repo with one planted bug, 3 failing tests (verified at baseline)
 - [x] Unit tests: sandbox path-escape/symlinks/allowlist, apply_patch
@@ -99,8 +100,8 @@ agent must fix the source.
   `api.openai.com` / `api.x.ai` in this environment (Anthropic/OpenAI were
   verified unreachable; PyPI reachable). The mock provider proves the plumbing
   (sandbox, tools, graph routing, logs, exit codes), NOT that an LLM can solve
-  novel bugs. First real run must use `LLM_PROVIDER=xai|anthropic|openai` with
-  a valid key in `.env`.
+  novel bugs. First real run must use `LLM_PROVIDER=groq|xai|anthropic|openai`
+  with a valid key in `.env`.
 - Retry loop is exercised by construction (`decide` unit tests) but has not been
   observed to recover from a failed first attempt with a real model.
 - `run_tests` parses counts with regexes against pytest's summary line; exotic
