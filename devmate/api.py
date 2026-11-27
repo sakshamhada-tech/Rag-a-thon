@@ -28,14 +28,20 @@ import json
 import os
 import queue
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .demos import list_demos, prepare_demo
 from .github import RepoInputError
 from .runner import RunBusyError, RunConflictError, RunManager, RunNotFoundError
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 app = FastAPI(title="DevMate Phase 2", version="0.2.0")
 
@@ -55,7 +61,11 @@ app.add_middleware(
 @app.middleware("http")
 async def require_api_token(request: Request, call_next):
     token = os.getenv("DEVMATE_API_TOKEN")
-    if token and request.url.path != "/health":
+    path = request.url.path
+    static_shell = request.method == "GET" and (
+        path == "/" or path == "/favicon.ico" or path.startswith("/assets/")
+    )
+    if token and path != "/health" and not static_shell:
         header = request.headers.get("authorization", "")
         supplied = header[7:] if header.lower().startswith("bearer ") else ""
         if not supplied or not hmac.compare_digest(supplied, token):
@@ -70,19 +80,47 @@ _STREAM_CLOSE_STATUSES = {"awaiting_approval", "applied", "rejected", "failed", 
 
 
 class RunRequest(BaseModel):
-    repo: str = Field(..., description="https://github.com/<owner>/<repo> (public only)")
+    repo: str | None = Field(default=None, description="https://github.com/<owner>/<repo> (public only)")
+    demo_id: str | None = Field(default=None, description="Built-in demo id from GET /demos")
     task: str = Field(..., min_length=1, max_length=2000)
     max_attempts: int | None = Field(default=None, ge=1, le=10)
 
 
+def _configured_model(settings) -> str:
+    provider = (settings.llm_provider or "").strip().lower()
+    return {
+        "anthropic": settings.anthropic_model,
+        "openai": settings.openai_model,
+        "xai": settings.xai_model,
+        "grok": settings.xai_model,
+        "groq": settings.groq_model,
+        "mock": "mock",
+    }.get(provider, "")
+
+
 @app.get("/")
 def index():
+    index_html = FRONTEND_DIST / "index.html"
+    if index_html.is_file():
+        return FileResponse(index_html)
     return {
-        "service": "DevMate Phase 2 API",
+        "service": "DevMate Phase 3 API",
         "status": "ok",
-        "message": "This is a JSON API. Use /health for liveness, /docs for the interactive API docs, or POST /runs to start a GitHub-repo run.",
-        "endpoints": ["/health", "/runs", "/docs", "/openapi.json"],
+        "message": "Frontend not built. Run `npm --prefix frontend install && npm --prefix frontend run build`, or use /docs for the API.",
+        "endpoints": ["/health", "/config", "/demos", "/runs", "/docs", "/openapi.json"],
     }
+
+
+@app.get("/config")
+def config():
+    from .config import load_settings
+    settings = load_settings()
+    return {"provider": settings.llm_provider, "model": _configured_model(settings)}
+
+
+@app.get("/demos")
+def demos():
+    return {"demos": list_demos()}
 
 
 @app.get("/health")
@@ -92,11 +130,24 @@ def health():
 
 @app.post("/runs", status_code=202)
 def create_run(req: RunRequest):
+    repo = (req.repo or "").strip()
+    demo_id = (req.demo_id or "").strip()
+    if bool(repo) == bool(demo_id):
+        raise HTTPException(status_code=400, detail="provide exactly one of repo or demo_id")
     try:
-        record = manager.start(req.repo, req.task,
-                               max_attempts=req.max_attempts,
-                               allow_local=False,
-                               printer=print)  # structured steps are streamed via SSE events
+        if demo_id:
+            source, display_repo = prepare_demo(demo_id)
+            record = manager.start(str(source), req.task,
+                                   max_attempts=req.max_attempts,
+                                   allow_local=True,
+                                   printer=print,
+                                   display_repo=display_repo,
+                                   patch_only=True)
+        else:
+            record = manager.start(repo, req.task,
+                                   max_attempts=req.max_attempts,
+                                   allow_local=False,
+                                   printer=print)  # structured steps are streamed via SSE events
     except RepoInputError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RunBusyError as e:
@@ -118,7 +169,7 @@ def get_run(run_id: str):
 
 
 @app.get("/runs/{run_id}/events")
-def stream_events(run_id: str):
+def stream_events(run_id: str, request: Request):
     try:
         manager.events(run_id)
     except RunNotFoundError:
@@ -129,7 +180,14 @@ def stream_events(run_id: str):
         history, subscription = emitter.begin_stream()
         try:
             # Replay what already happened so late subscribers see the full run.
+            try:
+                last_seen = int(request.headers.get("last-event-id", "0"))
+            except ValueError:
+                last_seen = 0
             for event in history:
+                seq = int(event.get("seq", 0) or 0)
+                if seq <= last_seen:
+                    continue
                 yield _sse(event)
             last_ping = time.time()
             while True:
@@ -185,4 +243,30 @@ def download_patch(run_id: str):
 
 def _sse(event: dict) -> str:
     event_type = event.get("type", "message")
-    return f"event: {event_type}\ndata: {json.dumps(event, default=str)}\n\n"
+    lines = []
+    seq = event.get("seq")
+    if seq is not None:
+        lines.append(f"id: {seq}")
+    lines.append(f"event: {event_type}")
+    lines.append(f"data: {json.dumps(event, default=str)}")
+    return "\n".join(lines) + "\n\n"
+
+
+if (FRONTEND_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def frontend_fallback(full_path: str):
+    reserved = ("runs", "docs", "redoc", "openapi.json", "health", "config", "demos")
+    if full_path == "" or full_path.split("/", 1)[0] in reserved:
+        raise HTTPException(status_code=404, detail="Not Found")
+    index_html = FRONTEND_DIST / "index.html"
+    candidate = (FRONTEND_DIST / full_path).resolve()
+    dist_real = FRONTEND_DIST.resolve()
+    if dist_real in candidate.parents or candidate == dist_real:
+        if candidate.is_file():
+            return FileResponse(candidate)
+    if index_html.is_file():
+        return FileResponse(index_html)
+    raise HTTPException(status_code=404, detail="Not Found")

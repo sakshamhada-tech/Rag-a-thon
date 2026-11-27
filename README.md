@@ -1,6 +1,6 @@
 # DevMate
 
-**From Generative AI to Agentic AI — hackathon project, Phase 2.**
+**From Generative AI to Agentic AI — hackathon project, Phase 3.**
 DevMate is an autonomous coding agent that takes a Python repo plus a task,
 analyses the repo, finds the bug, patches it, runs the real test suite, gets a
 second opinion from a Reviewer agent, and reports the result — from the CLI or
@@ -141,6 +141,72 @@ Config safety: `LLM_PROVIDERS` entries are printed as labels only (for example
 `groq1,groq2`); API keys are never printed at startup. Put all explicit entries
 on one physical `.env` line with a non-empty model.
 
+## Phase 3 web UI
+
+The repository now includes a React + TypeScript + Vite frontend in `frontend/`.
+Tech: React 18, TypeScript, plain CSS with design tokens, self-hosted IBM Plex
+fonts via Fontsource, lucide-react icons, native fetch + EventSource. No Tailwind,
+no component library.
+
+### Build and run (one process)
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+LLM_PROVIDER=mock .venv/bin/python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/`. FastAPI serves `frontend/dist` and the API from the
+same origin. `/health`, `/config`, `/demos`, `/runs` and `/runs/{id}/events` back
+the UI. Built-in demos appear in the left panel; GitHub runs still accept only
+public repositories. Demo runs are copied to a temp directory and can only export
+a patch, so approving a demo never mutates `demo_repo/` or `demo_repo_hard/`.
+
+### Frontend development
+
+```bash
+LLM_PROVIDER=mock .venv/bin/python -m uvicorn devmate.api:app --host 127.0.0.1 --port 8000
+cd frontend
+npm run dev   # Vite on 127.0.0.1:5173, proxying /runs, /demos, /config, /health
+```
+
+Set `VITE_API_PROXY_TARGET` from a shell if the API is not on port 8000.
+
+### UI environment and controls
+
+- `DEVMATE_API_TOKEN` — optional API bearer token. The static UI shell is public;
+  API routes still require `Authorization: Bearer ...` when this is set. For local
+  use, leave it unset or put the UI behind an authenticating proxy.
+- `CORS_ORIGINS` — comma-separated allowed origins for Vite/dev servers. Defaults
+  to localhost:3000 and localhost:5173.
+- `PORT` — used by the Docker image (`uvicorn ... --port $PORT`).
+- Theme initialisation happens in `frontend/index.html` before first paint; stored
+  choice is read from `localStorage` with a `prefers-color-scheme` fallback.
+
+### Key UI behaviour
+
+- Three regions on desktop, inspector collapsible; slide-over on tablet; bottom
+  tab bar on small screens.
+- SSE replay/live stream uses event sequence ids and `Last-Event-ID`; the reducer
+  dedupes by `seq`.
+- Diff is rendered by a custom unified-diff parser; tests/review/log tabs show
+  real run data only.
+- Approval remains consequential: confirmation step, disabled while in flight,
+  patch download for demo/GitHub runs, local apply only for approved local runs.
+
+### Docker
+
+```bash
+docker build -t devmate .
+docker run --rm -p 8000:8000 -e LLM_PROVIDER=mock devmate
+```
+
+The image builds `frontend/dist` in a Node stage, copies it into a slim Python
+runtime with git, and serves UI + API on `${PORT:-8000}`. It does not include a
+real `.env`; pass provider keys with `-e` only if you understand the risk.
+
 ## Security
 
 - `.env`, `.env.*` (except `.env.example`), private keys and common credential
@@ -216,7 +282,8 @@ JSON log in `logs/`.
 ```bash
 ( cd demo_repo && python -m pytest )      # baseline: 3 failed, 11 passed
 ( cd demo_repo_hard && python -m pytest ) # baseline: 5 failed, 9 passed
-python -m pytest tests/                   # unit tests
+python -m pytest tests/                   # unit tests (97 passing)
+cd frontend && npm run build              # TypeScript + Vite production build
 ```
 
 Offline end-to-end smoke (no keys, no network, `LLM_PROVIDER=mock`):
@@ -237,11 +304,13 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
   `events.py`, `runner.py`, `cli.py`, `api.py`, `github.py`)
 - `demo_repo/` — swiftcart (Phase 1 fixture)
 - `demo_repo_hard/` — ledgerline (Phase 2 fixture; two related bugs)
+- `frontend/` — Phase 3 React/TypeScript UI
+- `Dockerfile` / `.dockerignore` — single-image API + built UI
 - `tests/` — unit tests for the sandbox, tools, graph routing, caching,
   approval gate, GitHub validation and provider fallback
 - `logs/` — JSON run logs and approval patches (gitignored)
 - `SPEC.md` — architecture note + phase status
 
-## What is deliberately out of scope (Phase 2)
+## What is deliberately out of scope
 
 Web UI, deployment, Docker, vector search, PR creation. See `SPEC.md`.

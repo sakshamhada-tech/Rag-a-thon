@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -57,6 +58,8 @@ class RunRecord:
     is_github: bool
     max_attempts: int
     status: str = "pending"
+    patch_only: bool = False
+    source_repo: str = ""             # actual path/URL used for cloning; never shown as a display label
     created: float = field(default_factory=time.time)
     started: float | None = None
     finished: float | None = None
@@ -99,28 +102,33 @@ class RunManager:
 
     # ------------------------------------------------------------- control
     def start(self, repo: str, task: str, *, max_attempts: int | None = None,
-              allow_local: bool = True, printer=print) -> RunRecord:
+              allow_local: bool = True, printer=print,
+              display_repo: str | None = None, patch_only: bool = False) -> RunRecord:
         settings = load_settings()
         repo = (repo or "").strip()
         if not repo:
             raise RepoInputError("repo is required")
         if is_github_url(repo):
             is_github = True
+            source_repo = repo
         else:
             if not allow_local:
                 raise RepoInputError("only public GitHub URLs are accepted via the API")
             path = Path(repo).expanduser().resolve()
             if not path.is_dir():
                 raise RepoInputError(f"local repo not found or not a directory: {path}")
-            repo, is_github = str(path), False
+            if path == Path(path.anchor) or path == Path.cwd():
+                raise RepoInputError("refusing to use an overly broad directory as a repo")
+            source_repo, is_github = str(path), False
         if not task or not task.strip():
             raise RepoInputError("task is required")
         with self._lock:
             active = self._runs.get(self._active) if self._active else None
             if active and active.status in ACTIVE | HOLD:
                 raise RunBusyError(f"run {active.run_id} is {active.status}; try again later")
-            record = RunRecord(run_id=uuid.uuid4().hex[:12], repo_input=repo,
+            record = RunRecord(run_id=uuid.uuid4().hex[:12], repo_input=display_repo or source_repo,
                                task=task.strip(), is_github=is_github,
+                               patch_only=patch_only, source_repo=source_repo,
                                max_attempts=max_attempts or settings.max_attempts)
             self._runs[record.run_id] = record
             self._active = record.run_id
@@ -167,10 +175,10 @@ class RunManager:
         try:
             if record.is_github:
                 record.source_path = clone_public_repo(
-                    record.repo_input, clone_timeout=settings.clone_timeout,
+                    record.source_repo or record.repo_input, clone_timeout=settings.clone_timeout,
                     max_repo_mb=settings.max_repo_mb)
             else:
-                record.source_path = Path(record.repo_input)
+                record.source_path = Path(record.source_repo or record.repo_input)
             sandbox = Sandbox(record.source_path)
             record.sandbox = sandbox
             llm = get_llm(settings)
@@ -214,7 +222,7 @@ class RunManager:
         if record.status != "awaiting_approval":
             raise RunConflictError(f"run {run_id} is {record.status}, not awaiting_approval")
         diff = record.report.get("diff", "")
-        if record.is_github:
+        if record.is_github or record.patch_only:
             LOGS_DIR.mkdir(mode=0o700, exist_ok=True)
             os.chmod(LOGS_DIR, 0o700)
             patch_path = LOGS_DIR / f"{run_id}.patch"
@@ -222,8 +230,11 @@ class RunManager:
             os.chmod(patch_path, 0o600)
             record.patch_file = str(patch_path)
             record.report["patch_file"] = record.patch_file
+            message = ("Built-in demo runs never modify the checked-in fixtures; apply this patch to your own copy."
+                       if record.patch_only and not record.is_github
+                       else "GitHub clones are never pushed; apply this patch locally.")
             applied = {"patch_file": record.patch_file,
-                       "message": "GitHub clones are never pushed; apply this patch locally."}
+                       "message": message}
         else:
             assert record.sandbox is not None and record.source_path is not None
             self._apply_workspace_to_original(record.sandbox.workspace, record.source_path)
@@ -259,8 +270,18 @@ class RunManager:
         return self._get(run_id).emitter
 
     def list_runs(self) -> list[dict]:
-        return [r.public() for r in sorted(self._runs.values(),
-                                           key=lambda r: r.created, reverse=True)][:MAX_RECORDS]
+        runs = []
+        for r in sorted(self._runs.values(), key=lambda r: r.created, reverse=True)[:MAX_RECORDS]:
+            runs.append({
+                "run_id": r.run_id,
+                "repo": r.repo_input,
+                "status": r.status,
+                "task": r.task,
+                "error": r.error,
+                "created": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(r.created)),
+                "duration_s": round((r.finished or time.time()) - r.created, 2),
+            })
+        return runs
 
     # ------------------------------------------------------------ internals
     def _get(self, run_id: str) -> RunRecord:
@@ -285,8 +306,13 @@ class RunManager:
     def _cleanup(self, record: RunRecord):
         if record.sandbox is not None:
             record.sandbox.cleanup()
-        if record.is_github and record.source_path is not None:
-            shutil.rmtree(record.source_path.parent, ignore_errors=True)
+        if record.source_path is not None and (record.is_github or record.patch_only):
+            src = record.source_path.resolve()
+            parent = src.parent
+            tmp_root = Path(tempfile.gettempdir()).resolve()
+            safe_temp = parent.parent == tmp_root and parent.name.startswith(("devmate-github-", "devmate-demo-"))
+            if safe_temp:
+                shutil.rmtree(parent, ignore_errors=True)
 
     @staticmethod
     def _apply_workspace_to_original(workspace: Path, original: Path):

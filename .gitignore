@@ -28,3 +28,7 @@ logs/*.patch
 
 # Sandbox scratch
 /tmp/
+
+# Frontend
+node_modules/
+frontend/dist/

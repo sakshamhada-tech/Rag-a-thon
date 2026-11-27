@@ -19,12 +19,15 @@ class EventEmitter:
         self.run_id = run_id or uuid.uuid4().hex[:12]
         self.history: list[dict] = []
         self._subscribers: list[queue.Queue] = []
+        self._next_seq = 1
         self._lock = threading.Lock()
 
     def emit(self, type: str, **payload) -> dict:
-        event = {"ts": time.strftime("%H:%M:%S"), "run_id": self.run_id,
-                 "type": type, **redact_value(payload)}
+        payload = redact_value(payload)
         with self._lock:
+            event = {"seq": self._next_seq, "ts": time.strftime("%H:%M:%S"),
+                     "run_id": self.run_id, "type": type, **payload}
+            self._next_seq += 1
             self.history.append(event)
             subscribers = list(self._subscribers)
         for q in subscribers:

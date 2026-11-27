@@ -1,0 +1,74 @@
+import { Brain, CheckCircle2, ClipboardCheck, Code2, FlaskConical, Info, Loader2, Rocket, ShieldCheck, XCircle } from 'lucide-react';
+import type { DevmateEvent } from '../api/types';
+
+export type AgentKind = 'developer' | 'tester' | 'reviewer' | 'system';
+
+function agentFor(event: DevmateEvent): AgentKind {
+  const node = String(event.node || event.type || '').toLowerCase();
+  if (node.includes('review')) return 'reviewer';
+  if (node.includes('test') || node.includes('baseline')) return 'tester';
+  if (['analyse', 'plan', 'fix', 'developer'].some((s) => node.includes(s))) return 'developer';
+  return 'system';
+}
+
+export function AgentMarker({ agent }: { agent: AgentKind }) {
+  const common = { className: 'icon', 'aria-hidden': true as const };
+  if (agent === 'developer') return <span className="agent-marker agent-developer" title="Developer agent"><Code2 {...common} /></span>;
+  if (agent === 'tester') return <span className="agent-marker agent-tester" title="Tester agent"><FlaskConical {...common} /></span>;
+  if (agent === 'reviewer') return <span className="agent-marker agent-reviewer" title="Reviewer agent"><ShieldCheck {...common} /></span>;
+  return <span className="agent-marker agent-system" title="System"><Info {...common} /></span>;
+}
+
+function iconFor(event: DevmateEvent) {
+  switch (event.type) {
+    case 'start': return <Rocket aria-hidden="true" className="icon" />;
+    case 'done': return event.status === 'applied' ? <CheckCircle2 aria-hidden="true" className="icon" /> : <ClipboardCheck aria-hidden="true" className="icon" />;
+    case 'awaiting_approval': return <ShieldCheck aria-hidden="true" className="icon" />;
+    case 'review_verdict': return event.verdict === 'approve' ? <CheckCircle2 aria-hidden="true" className="icon" /> : <XCircle aria-hidden="true" className="icon" />;
+    case 'test_result': return event.status === 'passed' ? <CheckCircle2 aria-hidden="true" className="icon" /> : <XCircle aria-hidden="true" className="icon" />;
+    case 'llm_call': return <Brain aria-hidden="true" className="icon" />;
+    case 'llm_error': return <XCircle aria-hidden="true" className="icon" />;
+    default: return <Loader2 aria-hidden="true" className="icon" />;
+  }
+}
+
+function titleFor(event: DevmateEvent): string {
+  switch (event.type) {
+    case 'start': return 'Run started';
+    case 'step': return String(event.message || 'Step');
+    case 'test_result': return `Tests: ${event.status || 'unknown'} (${event.failed ?? 0} failed, ${event.passed ?? 0} passed)`;
+    case 'review_verdict': return `Review: ${event.verdict || 'unknown'} risk ${event.risk || 'unknown'}`;
+    case 'retry': return `Attempt ${(event.retry_index ?? 1) + 1}`;
+    case 'awaiting_approval': return 'Awaiting human approval';
+    case 'applied': return 'Changes applied';
+    case 'done': return `Run finished: ${String(event.status || 'done')}`;
+    case 'llm_call': return 'Model call completed';
+    case 'llm_error': return 'Model call failed';
+    default: return event.type.replace(/_/g, ' ');
+  }
+}
+
+function detailFor(event: DevmateEvent): string | null {
+  if (event.type === 'start') return `${event.repo || ''}${event.task ? ` — ${event.task}` : ''}`;
+  if (typeof event.error === 'string') return event.error;
+  if (typeof event.message === 'string' && event.type !== 'step') return event.message;
+  if (event.type === 'review_verdict' && typeof event.summary === 'string') return event.summary;
+  if (event.type === 'test_result' && Array.isArray(event.failing_tests) && event.failing_tests.length) return `Failing: ${event.failing_tests.join(', ')}`;
+  return null;
+}
+
+export function StepRow({ event }: { event: DevmateEvent }) {
+  const agent = agentFor(event);
+  const ms = typeof event.duration_ms === 'number' ? `${event.duration_ms.toFixed(0)}ms` : '';
+  return (
+    <div className="event-row" data-event-type={event.type}>
+      <div className="event-time">{event.ts}</div>
+      <AgentMarker agent={agent} />
+      <div className="event-body">
+        <div className="event-title">{iconFor(event)} <span style={{ verticalAlign: '2px', marginLeft: 6 }}>{titleFor(event)}</span></div>
+        {detailFor(event) && <div className="event-detail">{detailFor(event)}</div>}
+      </div>
+      <div className="event-actions mono">{ms}</div>
+    </div>
+  );
+}

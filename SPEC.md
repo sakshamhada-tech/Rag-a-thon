@@ -2,7 +2,9 @@
 
 ## Architecture note
 
-DevMate Phase 2 keeps the Phase 1 sandboxed loop and adds caching, a reviewer
+DevMate Phase 3 keeps the Phase 2 loop and adds a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
+
+Phase 2 kept the Phase 1 sandboxed loop and added caching, a reviewer
 agent, a human approval gate, a FastAPI/SSE server and strict GitHub input
 handling:
 
@@ -125,6 +127,14 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 
 ## Status
 
+### Done (Phase 3)
+
+- [x] Backend additions: `GET /demos`, `GET /config` (provider/model only), demo runs via `POST /runs {demo_id, task}` with checked-in fixtures untouched (temp copy, patch-only approval), lightweight `GET /runs` summaries, SSE event sequence ids + `Last-Event-ID` replay filter.
+- [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `DEVMATE_API_TOKEN` is set, API routes remain protected.
+- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
+- [x] Dockerfile (Node build stage + slim Python runtime with git) and `.dockerignore`.
+- [x] Backend tests extended to 97 passing; frontend `npm run build` passes.
+
 ### Done (Phase 2)
 - [x] Tool-call dedupe/cache with `[CACHED]` marker + mutation invalidation
 - [x] `repo_summary` + already-read file contents passed into plan/fix; "Do not
@@ -164,7 +174,10 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
   `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
   `awaiting_approval`; original fixtures untouched without `--yes`.
-- Unit suite: `92 passed`.
+- Unit suite: `97 passed`.
+- Frontend production build: `npm run build` passes (TypeScript `--noEmit` + Vite).
+- Live backend smoke in this sandbox with `LLM_PROVIDER=mock`: `GET /` returns the built UI, `/config` and `/demos` return expected JSON; `demo_repo` ran to `awaiting_approval` (11 passed/3 failed before; 14 passed after), approval exported an owner-only patch and the fixture stayed clean; `demo_repo_hard` showed a real retry (`attempt 2`) and reached `awaiting_approval` with 14 passed; reject worked; checked-in demo fixtures remained untouched.
+- The static UI is served by the same FastAPI process that passed the smoke test; SSE events carry `id:` sequence numbers.
 - Security hardening: tracked files/history were audited for obvious token
   patterns (only placeholder examples found); real `.env` and common credential
   files are excluded from sandboxes/diffs; startup prints provider labels only;
@@ -179,6 +192,13 @@ JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
 - FastAPI process verified locally: `POST /runs` with a local path returns 400;
   public GitHub URL returns 202 and streams SSE events replaying the run;
   local approval covered by unit tests.
+
+### Phase 3 known limitations / honestly not verified
+
+- No real browser was available in this sandbox, so the View Transitions wipe direction, focus traversal, axe/Lighthouse audit, responsive breakpoints and screenshots were **not visually verified**. The CSS implements the specified clip-path directions; initial theme script and reduced-motion fallback follow the brief.
+- Docker was not installed in this sandbox, so `docker build` / `docker run` could not be executed here; the Dockerfile is written but unbuilt locally.
+- The UI talks to the live FastAPI app through same-origin routes; no `DEVMATE_API_TOKEN` browser-auth flow is provided for EventSource (local use should leave the token unset or use an authenticating proxy).
+- Human visual QA still needed for both themes at desktop/tablet/mobile widths and for WCAG AA claims.
 
 ### Known limitations / honestly not verified
 - **No Phase 2 real-LLM run in this sandbox** — there is no `.env`/API key here
