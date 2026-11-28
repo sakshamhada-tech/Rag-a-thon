@@ -143,3 +143,35 @@ def test_anthropic_client_serializes_dict_tool_calls(monkeypatch):
     assert tool_use["id"] == "call_1"
     assert tool_use["input"] == {"path": ".", "max_depth": 2}
     assert resp.text == "ok"
+
+
+# ------------------------------------------------ plain-text review protocol
+
+def test_parse_plain_text_approve():
+    from fixora.agents.reviewer import _parse_review
+    review = _parse_review("APPROVE\n- root cause fix, minimal diff\nrisk: low")
+    assert review["verdict"] == "approve"
+    assert review["risk"] == "low"
+    assert review["issues"] == ["root cause fix, minimal diff"]
+
+
+def test_parse_plain_text_reject_with_issues():
+    from fixora.agents.reviewer import _parse_review
+    review = _parse_review("REJECT\n- touches tests/ and loosens assertions\n- unrelated reformat\nrisk: high")
+    assert review["verdict"] == "reject"
+    assert review["risk"] == "high"
+    assert len(review["issues"]) == 2
+
+
+def test_parse_plain_text_ambiguous_fails_closed():
+    from fixora.agents.reviewer import _parse_review
+    review = _parse_review("I examined the diff and it looks mostly fine overall.")
+    assert review["verdict"] == "reject"
+    assert review["issues"]
+
+
+def test_parse_json_still_works():
+    from fixora.agents.reviewer import _parse_review
+    review = _parse_review('{"verdict": "approve", "issues": [], "risk": "medium", "summary": "ok"}')
+    assert review["verdict"] == "approve"
+    assert review["risk"] == "medium"

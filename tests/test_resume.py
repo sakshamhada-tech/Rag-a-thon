@@ -78,7 +78,7 @@ def test_mid_run_provider_switch_does_not_restart_workflow(monkeypatch, tmp_path
     # test_result events for the meridian fixture: baseline + 2 fix attempts).
     assert _count_events(record, "test_result") == 3
     # And the failover actually happened (logged for the operator).
-    assert any("LLM FALLBACK" in str(step.get("message", ""))
+    assert any("Switching to next API key" in str(step.get("message", ""))
                for step in getattr(record.ctx, "steps", []))
 
 

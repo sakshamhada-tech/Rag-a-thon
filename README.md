@@ -257,8 +257,12 @@ on-disk run log.
 ### LLM fallback chain
 
 Set `LLM_PROVIDERS` in `.env` to try providers in order on
-429/timeout/5xx/connection errors, with exponential backoff and a
-`[LLM FALLBACK]` log line. The workflow is checkpointed after every node
+429/timeout/5xx/connection errors. After one retry on the failing key, the
+chain switches FORWARD to the next key in the list and stays there — keys are
+walked in number order and never flapped back to an earlier key, so runs with
+several free-tier keys don't bounce between them every call. The operator
+console prints a `[LLM FALLBACK]` line; the dashboard only shows the friendly
+message `Switching to next API key`. The workflow is checkpointed after every node
 (LangGraph `MemorySaver`, thread = run id), so switching keys/providers
 **does not restart the run** — completed phases are kept and only the failed
 node re-executes. If even the fallback chain is exhausted (e.g. all keys
@@ -522,8 +526,8 @@ subprocesses are ≈ 0.7 s each. On a real provider, wall-clock is dominated by 
    call (the heuristic already returns `low` for simple tasks; this forces it even
    when the first test run fails with errors).
 3. **`--max-attempts 1`** — bounded, but gives up on the first failing iteration.
-4. **`FIXORA_PROVIDER_COOLDOWN`** — already skips dead keys instead of paying
-   2 failed attempts + a 1 s sleep per call.
+4. **Add more keys via `LLM_PROVIDERS`** — the chain walks forward only
+   (key1 → key2 → key3) and never returns to an earlier key in the same process.
 5. Endpoint stability (`base_url` latency, provider region) and output verbosity
    of the model.
 
@@ -661,8 +665,9 @@ Dependency problems are first-class:
 Other hardening in the same vein:
 
 - Providers that fail with a retryable error (429/5xx/timeout) are skipped for
-  `FIXORA_PROVIDER_COOLDOWN` seconds (default 300; `0` restores always-retry)
-  instead of being re-tried on every tool call.
+  the rest of the process (the fallback chain advances monotonically); the
+  dashboard only shows `Switching to next API key` — raw provider errors stay
+  on the server console.
 - Sandbox subprocesses (pytest, pip) run with a minimal allowlisted environment
   — host API keys and `FIXORA_API_TOKEN` are not visible to repo code.
 - `PYTHONDONTWRITEBYTECODE=1` plus explicit `__pycache__` invalidation after

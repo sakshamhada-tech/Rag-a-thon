@@ -173,7 +173,12 @@ def _is_test_path(path: str) -> bool:
 
 
 def _parse_review(text: str) -> dict:
-    """Extract and validate the reviewer's strict-JSON verdict."""
+    """Extract and validate the reviewer's verdict.
+
+    Accepts a JSON object (preferred) or the plain-text protocol used by the
+    tool-enabled pass (line 1 APPROVE|REJECT, '-' bullet issues, final
+    'risk: ...' line). Anything unreadable fails closed to reject.
+    """
     payload = None
     candidate = (text or "").strip()
     try:
@@ -186,11 +191,12 @@ def _parse_review(text: str) -> dict:
                 break
             except ValueError:
                 continue
-    if not isinstance(payload, dict):
-        return {"verdict": "reject",
-                "issues": ["reviewer returned no valid JSON verdict"],
-                "risk": "high",
-                "summary": "Could not parse reviewer output; refusing to auto-approve."}
+    if isinstance(payload, dict):
+        return _normalise_verdict(payload)
+    return _parse_plain_text_review(candidate)
+
+
+def _normalise_verdict(payload: dict) -> dict:
     verdict = str(payload.get("verdict", "reject")).lower().strip()
     if verdict not in {"approve", "reject"}:
         verdict = "reject"
@@ -206,3 +212,34 @@ def _parse_review(text: str) -> dict:
             "issues": [str(i) for i in issues][:20],
             "risk": risk,
             "summary": str(payload.get("summary", ""))[:2000]}
+
+
+def _parse_plain_text_review(text: str) -> dict:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    lowered = text.lower()
+    head = lines[0].lower() if lines else ""
+    head_word = re.sub(r"[^a-z ]", "", head)
+    if head_word.startswith("reject"):
+        verdict = "reject"
+    elif head_word.startswith("approve"):
+        verdict = "approve"
+    elif re.search(r"\breject\b", head):
+        verdict = "reject"
+    else:
+        verdict = "reject"  # ambiguous -> fail closed; never auto-approve
+    issues = []
+    for ln in lines:
+        if ln.startswith(("-", "•", "*")):
+            item = ln.lstrip("-•* ").strip()
+            if item and not re.match(r"(?i)^risk[:\s]", item):
+                issues.append(item)
+    if not issues and verdict == "reject":
+        issues = ["reviewer output was not structured; inspect the diff manually"]
+    match = re.search(r"(?i)risk[:\s]+(low|medium|high|med)\b", lowered)
+    risk = match.group(1).lower() if match else ("medium" if verdict == "approve" else "high")
+    if risk == "med":
+        risk = "medium"
+    return {"verdict": verdict,
+            "issues": issues[:20],
+            "risk": risk,
+            "summary": text.strip()[:2000] or "(empty review)"}

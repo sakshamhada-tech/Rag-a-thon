@@ -25,6 +25,9 @@ Work only with the provided tools. Never invent file contents or test results.
 Be terse. Paths are relative to the repo root. When your task is done, reply
 with your final answer as plain text and do NOT call any more tools.
 Do not re-read files you already have.
+Never emit a tool call named 'json', 'commentary', 'analysis', 'final', 'output_final'
+or any other pseudo-tool — they do not exist. Only the tools listed below exist.
+If you want to answer in JSON, write the JSON object as plain reply text.
 {extra}"""
 
 _PHASE_DETAILS = {
@@ -51,12 +54,10 @@ _PHASE_DETAILS = {
              "write_file", "apply_patch", "install_dependencies",
              "retrieve_code", "search_semantic"]),
     "review": ("You are the Reviewer. Inspect changed files with read-only tools if needed. "
-               "Never call tools named json, commentary, output_final or similar pseudo-tools; "
-               "if no read-only tool is needed, reply directly with the JSON object. Output "
-               "STRICT JSON only — no markdown, no prose outside the JSON — matching: "
-               '{"verdict": "approve"|"reject", "issues": ["..."], "risk": "low"|"medium"|"high", '
-               '"summary": "..."}. Check for a root-cause fix vs hack, weakened/deleted tests, '
-               "unrelated changes and possible regressions. If anything is off, verdict must be reject.",
+               "Reply in plain text, not JSON: line 1 is APPROVE or REJECT; then one '-' bullet "
+               "per issue; last line 'risk: low|medium|high'. Check for a root-cause fix vs hack, "
+               "weakened/deleted tests, unrelated changes and possible regressions. "
+               "If anything is off, the verdict must be REJECT.",
                ["list_tree", "read_file", "search_code", "get_dependencies"]),
 }
 
@@ -78,8 +79,10 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
         {"role": "system", "content": system},
         {"role": "user", "content": instruction},
     ]
+    allowed_names = set(allowed)
     final_text = ""
     validation_retries = 0
+    pseudo_tool_turns = 0
     for _ in range(ctx.settings.max_tool_steps):
         try:
             budget = _context_budget()
@@ -131,10 +134,32 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
         if not resp.tool_calls:
             final_text = resp.text.strip()
             break
+        bogus = [tc for tc in resp.tool_calls if tc.name not in allowed_names]
+        if bogus:
+            pseudo_tool_turns += 1
+            bogus_names = ", ".join(sorted({tc.name for tc in bogus}))
+            ctx.printer(f"[WARN] {phase}: ignored tool call(s) not available in this phase: {bogus_names}")
+            ctx.log_step(phase, f"ignoring unavailable tool call(s): {bogus_names}",
+                         reason="pseudo_tool")
         for tc in resp.tool_calls:
+            if tc.name not in allowed_names:
+                # Never executed: models on some providers emit pseudo-tools such as
+                # 'json'/'commentary' instead of replying with text. Answer every call
+                # id with an error result so the conversation stays valid.
+                new_messages.append({"role": "tool", "tool_call_id": tc.id,
+                                     "name": tc.name,
+                                     "content": json.dumps({
+                                         "error": f"'{tc.name}' is not an available tool in this "
+                                                  f"phase. Available tools: {allowed_list}. "
+                                                  "If you meant to output JSON, write the JSON "
+                                                  "object as plain reply text."})})
+                continue
             result = ctx.execute_tool(phase, tc.name, tc.arguments)
             new_messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "name": tc.name, "content": result[:MAX_OUTPUT_CHARS]})
+        if pseudo_tool_turns > 3:
+            raise LLMError(f"{phase}: model repeatedly called unavailable tools "
+                           f"({bogus_names}) — stopping the turn")
     else:
         final_text = final_text or "[stopped: tool-step cap reached]"
         ctx.log_step(phase, final_text)

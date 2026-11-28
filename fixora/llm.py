@@ -8,8 +8,12 @@ no real reasoning and must not be used in production.
 Fallback chain: set LLM_PROVIDERS in .env, e.g.
   LLM_PROVIDERS=groq,openai                     # bare names, uses per-provider env
   LLM_PROVIDERS=groq|https://api.groq.com/openai/v1|gsk_key|openai/gpt-oss-120b,openai|https://api.openai.com/v1|sk_key|gpt-4o-mini
-On 429/timeout/5xx/connection errors the client backs off exponentially, then
-switches to the next provider and logs a [LLM FALLBACK] line.
+On 429/timeout/5xx/connection errors the client backs off once, then switches
+FORWARD to the next provider in LLM_PROVIDERS and stays there: the chain is
+monotonic for the lifetime of the process and never returns to an earlier key
+(so a single run cannot flap key1 → key2 → key1 → key2 ...). The operator
+console prints a [LLM FALLBACK] line; the dashboard only ever sees the
+friendly message "Switching to next API key".
 
 Internal message format (neutral dicts, OpenAI-flavoured):
   {"role": "system"|"user", "content": str}
@@ -20,7 +24,6 @@ Tool schemas are passed as {"name", "description", "parameters": JSONSchema}.
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -422,43 +425,27 @@ def _is_retryable(error: Exception) -> bool:
 
 
 class FallbackLLMClient:
-    """Try each client in order; switch on retryable errors with backoff.
+    """Try clients in the configured order; switch FORWARD on retryable errors.
 
-    A client that exhausts its retries on a retryable error is placed on cooldown
-    and skipped entirely for `cooldown_seconds`, so subsequent calls don't burn
-    two failing requests plus a sleep on a key known to be rate-limited.
+    Monotonic for the process lifetime: once client N has been exhausted by a
+    retryable error, later calls never go back to N-1, N-2, ... The pointer
+    advances once and sticks at the healthy client, so a run walks the keys in
+    number order (key1 → key2 → key3 …) and never flaps back to an earlier key.
+    Callers in tests/tools can subclass; the class is stateful by design.
     """
 
     provider_label = "fallback"
 
     def __init__(self, clients: list):
         self.clients = clients
-        self._cooldowns: dict[int, float] = {}
-        raw = (os.environ.get("FIXORA_PROVIDER_COOLDOWN", "300") or "300").strip()
-        try:
-            self.cooldown_seconds = max(0.0, float(raw))
-        except ValueError:
-            self.cooldown_seconds = 300.0
-
-    def _cooling(self, idx: int) -> float:
-        """Seconds remaining on this client's cooldown (0 when ready)."""
-        until = self._cooldowns.get(idx)
-        if not until:
-            return 0.0
-        remaining = until - time.monotonic()
-        return remaining if remaining > 0 else 0.0
+        self._cursor = 0  # index into clients; only ever increases
 
     def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+        n = len(self.clients)
         last_error: LLMError | None = None
-        now = time.monotonic()
-        for idx, client in enumerate(self.clients):
+        for idx in range(self._cursor, n):
+            client = self.clients[idx]
             label = getattr(client, "provider_label", f"provider-{idx}")
-            remaining = self._cooling(idx)
-            if remaining > 0:
-                last_error = last_error or LLMError(
-                    f"Provider {label!r} is on cooldown for {int(remaining)}s "
-                    f"(retryable error; FIXORA_PROVIDER_COOLDOWN={int(self.cooldown_seconds)})")
-                continue
             for attempt in range(2):
                 try:
                     resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
@@ -472,20 +459,18 @@ class FallbackLLMClient:
                     if attempt == 0:
                         time.sleep(2 ** attempt)
                         continue
-                    if self.cooldown_seconds > 0:
-                        self._cooldowns[idx] = time.monotonic() + self.cooldown_seconds
-                    if idx < len(self.clients) - 1:
-                        nxt = getattr(self.clients[idx + 1], "provider_label", f"provider-{idx+1}")
+                    self._cursor = idx + 1
+                    if idx < n - 1:
+                        nxt = getattr(self.clients[idx + 1], "provider_label", f"provider-{idx + 1}")
                         _log_fallback(f"[LLM FALLBACK] {label} failed ({_brief(e)}); "
-                                      f"skipping it for {int(self.cooldown_seconds)}s; trying {nxt}")
+                                      f"switching forward to {nxt}")
                     break
-        assert last_error is not None
-        if all(self._cooling(i) > 0 for i in range(len(self.clients))):
-            earliest = min(self._cooldowns[i] for i in range(len(self.clients)))
-            retry_in = max(0, int(earliest - time.monotonic()))
-            raise LLMError(f"All {len(self.clients)} providers are on cooldown "
-                           f"(retryable errors, e.g. rate limits); next retry in ~{retry_in}s")
-        raise last_error
+        if last_error is not None:
+            raise LLMError(
+                f"All {n} configured API keys have reached their limits (or are "
+                f"temporarily unavailable). Add another key via LLM_PROVIDERS, or "
+                f"wait and retry. Last error: {_brief(last_error, 120)}")
+        raise LLMError("No LLM providers configured")
 
 
 def _log_usage(label: str, usage: dict):
@@ -494,11 +479,12 @@ def _log_usage(label: str, usage: dict):
           f"total={usage.get('total_tokens')}")
 
 
-def _log_fallback(message: str):
-    print(message)
+def _log_fallback(detail: str, friendly: str = "Switching to next API key"):
+    # Operator console gets the technical detail; UI/journal get the friendly line.
+    print(detail)
     cb = getattr(FallbackLLMClient, "on_fallback", None)
     if callable(cb):
-        cb(message)
+        cb(friendly)
 
 
 def _brief(e: Exception, limit: int = 160) -> str:

@@ -84,6 +84,8 @@ html.resizing-panels, html.resizing-panels * { cursor: col-resize !important; us
 .error-banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; border-left-color: var(--danger); color: var(--danger); background: var(--danger-bg, var(--neutral-bg)); margin-bottom: var(--space-3); }
 .error-banner > span { min-width: 0; overflow-wrap: anywhere; }
 .button-small { min-height: 30px; padding: 0 var(--space-3); font-size: var(--text-xs); flex: 0 0 auto; }
+.provider-switch { display: inline-flex; align-items: center; gap: var(--space-2); border-left-color: var(--accent); color: var(--text); }
+.provider-switch .icon { width: 14px; height: 14px; color: var(--accent); }
 .retry-row { border-left: 2px solid var(--warning); padding-left: var(--space-3); color: var(--warning); font-size: var(--text-sm); }
 
 .inspector { flex: 0 0 var(--inspector-w, 420px); width: var(--inspector-w, 420px); min-width: 320px; background: var(--surface); }

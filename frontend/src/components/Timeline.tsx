@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Radio, Wrench } from 'lucide-react';
+import { KeyRound, ArrowDown, Radio, Wrench } from 'lucide-react';
 import type { FixoraEvent } from '../api/types';
 import { EmptyState } from './EmptyState';
 import { StepRow } from './StepRow';
@@ -118,8 +118,9 @@ export function Timeline({ events, status, sseStatus, error, resumable, resuming
               if (event.type === 'retry') {
                 return <div key={item.key} className="retry-row" role="note">Attempt {(event.retry_index ?? 0) + 2}: reviewer or tests requested another pass.</div>;
               }
-              if (event.type === 'step' && String(event.node) === 'llm' && String(event.message || '').toLowerCase().includes('provider')) {
-                return <div key={item.key} className="inline-notice" role="note">{event.message}</div>;
+              if (event.type === 'step' && String(event.node) === 'llm' &&
+                  String(event.message || '').startsWith('Switching to next API key')) {
+                return <div key={item.key} className="inline-notice provider-switch" role="status"><KeyRound aria-hidden="true" className="icon" /> {event.message}</div>;
               }
               return <StepRow key={item.key} event={event} />;
             })}
