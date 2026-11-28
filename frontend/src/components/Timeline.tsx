@@ -11,6 +11,9 @@ interface Props {
   status: string;
   sseStatus: 'idle' | 'connecting' | 'live' | 'disconnected';
   error?: string | null;
+  resumable?: boolean;
+  resuming?: boolean;
+  onResume?: () => void;
 }
 
 interface RenderItem {
@@ -46,7 +49,7 @@ function buildItems(events: FixoraEvent[]): RenderItem[] {
   return items;
 }
 
-export function Timeline({ events, status, sseStatus, error }: Props) {
+export function Timeline({ events, status, sseStatus, error, resumable, resuming, onResume }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const items = useMemo(() => buildItems(events), [events]);
@@ -86,7 +89,16 @@ export function Timeline({ events, status, sseStatus, error }: Props) {
 
       <AgentRoster events={events} status={status} />
       <div ref={scrollRef} className="timeline-scroll" onScroll={handleScroll} tabIndex={0} aria-label="Run event timeline">
-        {error && <div className="inline-notice" role="alert" style={{ borderLeftColor: 'var(--danger)', color: 'var(--danger)', marginBottom: 'var(--space-3)' }}>{error}</div>}
+        {error && (
+          <div className="inline-notice error-banner" role="alert">
+            <span>{error}</span>
+            {resumable && onResume && (
+              <button type="button" className="button button-primary button-small" onClick={onResume} disabled={resuming}>
+                {resuming ? 'Resuming…' : 'Resume run'}
+              </button>
+            )}
+          </div>
+        )}
         {items.length === 0 ? (
           <EmptyState icon={Radio} title="No run selected" detail="Start a run from the setup panel. Steps, tool calls and review verdicts will appear here live." />
         ) : (

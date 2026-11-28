@@ -101,7 +101,7 @@ export function RunSetup({ status, onStart }: Props) {
 
         {submitError && <ErrorNotice message={submitError} />}
 
-        <button type="submit" className="button button-primary" disabled={!canSubmit} style={{ width: '100%', justifyContent: 'center', marginTop: 'var(--space-2)' }}>
+        <button type="submit" className="button button-primary" disabled={!canSubmit} style={{ marginTop: 'var(--space-2)' }}>
           <Play aria-hidden="true" className="icon" />
           {submitting ? 'Starting run' : active ? 'Run active' : 'Start run'}
         </button>

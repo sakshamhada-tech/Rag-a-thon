@@ -102,7 +102,7 @@ def _configured_model(settings) -> str:
 def index():
     index_html = FRONTEND_DIST / "index.html"
     if index_html.is_file():
-        return FileResponse(index_html)
+        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
     return {
         "service": "Fixora API",
         "status": "ok",
@@ -227,6 +227,25 @@ def approve_run(run_id: str):
         raise HTTPException(status_code=409, detail=str(e)) from e
 
 
+@app.post("/runs/{run_id}/resume")
+def resume_run(run_id: str):
+    """Resume a run whose graph failed on a provider error.
+
+    The LangGraph checkpoint keeps every completed node; resume re-executes
+    only the failed node. 409 when the run is not resumable; 429 when another
+    run is active.
+    """
+    try:
+        record = manager.resume(run_id)
+    except RunNotFoundError:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}") from None
+    except RunBusyError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
+    except RunConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {"run_id": record.run_id, "status": record.status}
+
+
 @app.post("/runs/{run_id}/reject")
 def reject_run(run_id: str):
     try:
@@ -275,5 +294,5 @@ def frontend_fallback(full_path: str):
         if candidate.is_file():
             return FileResponse(candidate)
     if index_html.is_file():
-        return FileResponse(index_html)
+        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
     raise HTTPException(status_code=404, detail="Not Found")

@@ -109,13 +109,16 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
                     "If you meant to edit code, describe the edit instead of calling it now.")
                 ctx.printer(f"[ERROR] {phase} tool-call rejected; retrying with correction "
                             f"({validation_retries}/2)")
-                ctx.log_step(phase, "unavailable tool call rejected by provider", error=str(e))
+                ctx.log_step(phase, "unavailable tool call rejected by provider", reason="tool_rejected")
                 new_messages.append({"role": "user", "content": correction})
                 continue
             else:
                 # Fatal for this run (bad key/model/base URL/tool schema): stop.
+                # The raw provider error stays on the operator console; the
+                # journal/UI get a generic message (provider internals are not
+                # dashboard content).
                 ctx.printer(f"[ERROR] {phase} failed: {e}")
-                ctx.log_step(phase, f"llm error: {e}")
+                ctx.log_step(phase, "llm call failed — see run log for details")
                 raise
         assistant_msg = {"role": "assistant", "content": resp.text}
         if resp.tool_calls:

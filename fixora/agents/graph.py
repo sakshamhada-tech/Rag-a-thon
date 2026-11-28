@@ -38,7 +38,14 @@ class AgentState(TypedDict, total=False):
     messages: list
 
 
-def build_graph(ctx: RunContext):
+def build_graph(ctx: RunContext, checkpointer=None):
+    """Compile the agent graph.
+
+    Pass a checkpointer (e.g. langgraph MemorySaver) with a stable thread_id to
+    make the run resumable: if a node dies (provider exhausted, 413, ...) the
+    caller can invoke ``graph.invoke(None, config)`` and only the failed node
+    re-executes — baseline/analyse/plan results are kept in the checkpoint.
+    """
     g = StateGraph(AgentState)
     g.add_node("baseline", lambda s: baseline_node(ctx, s))
     g.add_node("analyse", lambda s: analyse_node(ctx, s))
@@ -55,7 +62,7 @@ def build_graph(ctx: RunContext):
     g.add_conditional_edges("test", after_test, {"fix": "fix", "review": "review", "report": "report"})
     g.add_conditional_edges("review", after_review, {"fix": "fix", "report": "report"})
     g.add_edge("report", END)
-    return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 def _tests_pass(state: AgentState) -> bool:

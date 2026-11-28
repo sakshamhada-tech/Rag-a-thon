@@ -47,6 +47,7 @@ export default function App() {
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [mobileTab, setMobileTab] = useState<'run' | 'timeline' | 'inspector'>('run');
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
   const streamRef = useRef<StreamHandle | null>(null);
   const workbenchRef = useRef<HTMLElement | null>(null);
@@ -227,6 +228,19 @@ export default function App() {
     connectToRun(res.run_id);
   }
 
+  async function handleResume() {
+    if (!state.currentRunId) return;
+    setResumeBusy(true);
+    try {
+      await api.resumeRun(state.currentRunId);
+      connectToRun(state.currentRunId);
+    } catch (error) {
+      setOutcome(error instanceof Error ? error.message : 'Could not resume the run');
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
   async function handleApprove() {
     if (!state.currentRunId) return;
     setApprovalBusy(true);
@@ -292,7 +306,10 @@ export default function App() {
           onKeyDown={handleSeparatorKeyDown('left')}
         />
 
-        <Timeline events={state.events} status={String(state.status)} sseStatus={state.sseStatus} error={terminalError} />
+        <Timeline events={state.events} status={String(state.status)} sseStatus={state.sseStatus} error={terminalError}
+                  resumable={state.status === 'error' && Boolean(state.detail?.resumable)}
+                  resuming={resumeBusy}
+                  onResume={handleResume} />
 
         {inspectorOpen ? (
           <>

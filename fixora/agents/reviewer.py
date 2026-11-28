@@ -48,7 +48,7 @@ def review_node(ctx, state: dict) -> dict:
         ctx.printer(f"[REVIEW] tool-enabled pass failed; retrying verdict-only "
                     f"(provider issue: {inspection_error})")
         ctx.log_step("review", "tool-enabled review failed; verdict-only fallback",
-                     error=str(inspection_error))
+                     reason="llm_error")
         review, fallback_msgs = _review_without_tools(ctx, state, diff, inspection_error, effort)
         if review is None:
             review = {"verdict": "reject",

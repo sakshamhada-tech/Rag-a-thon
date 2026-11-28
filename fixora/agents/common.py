@@ -48,7 +48,8 @@ class RunContext:
         entry = {"ts": time.strftime("%H:%M:%S"), "node": node,
                  "message": redact_text(message), **redact_value(data)}
         self.steps.append(entry)
-        self.emitter.emit("step", node=node, message=message, **data)
+        self.emitter.emit("step", node=node,
+                          message=entry["message"], **redact_value(data))
 
     def tool_call(self, node: str, name: str, args: dict, result: str,
                   duration_ms: float = 0.0, cached: bool = False):

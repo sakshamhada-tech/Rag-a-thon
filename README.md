@@ -258,7 +258,16 @@ on-disk run log.
 
 Set `LLM_PROVIDERS` in `.env` to try providers in order on
 429/timeout/5xx/connection errors, with exponential backoff and a
-`[LLM FALLBACK]` log line:
+`[LLM FALLBACK]` log line. The workflow is checkpointed after every node
+(LangGraph `MemorySaver`, thread = run id), so switching keys/providers
+**does not restart the run** — completed phases are kept and only the failed
+node re-executes. If even the fallback chain is exhausted (e.g. all keys
+rate-limited), the run ends in `error` with the workspace kept alive and the
+dashboard offers a **Resume run** action (API: `POST /runs/{run_id}/resume`)
+that continues from the failed node instead of starting over; a *fresh* run is
+only one click away and keeps semantics unchanged. Note that nodes are not
+transaction-wrapped: a provider failure inside `fix` discards that node's
+partial tool calls (edits made inside the sandbox before the crash are kept).
 
 ```bash
 # bare names (reuse per-provider settings):
@@ -377,6 +386,49 @@ understand the risk. **Note:** Docker was not available in the build sandbox
 used by the maintainer agent, so this image is written but not built/verified
 there — `docker build -t fixora .` is the command to run where Docker exists.
 
+### Vercel (static frontend)
+
+The repo is deployable on Vercel as a **static frontend** (`frontend/`) plus a
+**separately hosted backend** — the full backend cannot run on Vercel's
+serverless functions (it uses threads, a 900 s run timeout, and an in-memory
+run registry + filesystem workspaces/logs).
+
+What is in the repo:
+
+- `vercel.json` — builds `frontend/` with `npm ci && npm run build`, serves
+  `frontend/dist`, and rewrites every non-file route to `index.html` so the
+  SPA works on refresh/deep-link.
+- `.vercelignore` — keeps backend sources, tests and caches out of the
+  deployment upload.
+- `VITE_API_BASE` — build-time env var. Empty (the default) means
+  same-origin API calls, which is correct for Docker / FastAPI-served UI.
+  On Vercel, set `VITE_API_BASE` to the public URL of your hosted Fixora
+  backend (Vercel project settings → Environment Variables, or
+  `vercel env add VITE_API_BASE`). The frontend then calls that origin
+  directly for REST and SSE. Leave it unset and the UI loads but cannot
+  reach any API.
+- The backend must allow the Vercel origin via `CORS_ORIGINS`
+  (e.g. `CORS_ORIGINS=https://your-app.vercel.app`).
+
+Steps:
+
+```bash
+# 1) Host the backend somewhere long-lived (Docker/Flight/Render/...):
+#    see the Docker section; set FIXORA_EMBEDDER=hash if its network cannot
+#    reach HuggingFace, and LLM_PROVIDER / keys as usual.
+docker build -t fixora . && docker run --rm -p 8000:8000 -e LLM_PROVIDER=mock fixora
+
+# 2) Deploy the frontend from the repo root:
+npm i -g vercel   # or use the Vercel dashboard with the GitHub repo
+vercel env add VITE_API_BASE production   # e.g. https://fixora-backend.example.com
+vercel --prod
+```
+
+Honest limits: there is no serverless backend in this deployment; if you need
+a fully self-contained Vercel deployment, the run engine (runner, sandbox,
+agents, memory) would have to be re-architected onto a queue + worker +
+external store — out of scope for this repository as-is.
+
 ## Security
 
 - `.env`, `.env.*` (except `.env.example`), private keys and common credential
@@ -425,6 +477,10 @@ curl -N http://127.0.0.1:8000/runs/$run_id/events
 
 # current state: diff, tests before/after, review, timings
 curl -s http://127.0.0.1:8000/runs/$run_id | jq
+
+# if the run died on a provider error: resume from the failed node (not from scratch)
+curl -X POST http://127.0.0.1:8000/runs/run_xxx/resume \
+  -H "Authorization: Bearer $FIXORA_API_TOKEN"
 
 # consequential action — only after the run reaches awaiting_approval
 curl -X POST http://127.0.0.1:8000/runs/$run_id/approve   # writes logs/<id>.patch for GitHub runs

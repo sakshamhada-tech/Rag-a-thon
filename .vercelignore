@@ -1,0 +1,19 @@
+# The Vercel deployment builds and serves the static frontend only.
+# The Fixora backend (threads, workspaces, long-lived runs) cannot run on
+# serverless — host it separately and set VITE_API_BASE at build time.
+.git
+.venv
+__pycache__
+node_modules
+frontend/node_modules
+frontend/dist
+demo_repo_import
+demo_repo_hard
+runs
+*.log
+.pytest_cache
+.ruff_cache
+tests
+fixora
+docs
+scripts

@@ -29,6 +29,7 @@ from .sandbox import Sandbox, SandboxError, _snapshot
 from .tools import build_tools
 from .agents.common import RunContext
 from .agents.graph import build_graph, initial_state
+from langgraph.checkpoint.memory import MemorySaver
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -72,6 +73,9 @@ class RunRecord:
     sandbox: Sandbox | None = None
     ctx: RunContext | None = None
     emitter: EventEmitter = field(default_factory=EventEmitter)
+    graph: object | None = None
+    graph_config: dict | None = None
+    resumable: bool = False
 
     def public(self) -> dict:
         diff = self.report.get("diff", "")
@@ -82,6 +86,7 @@ class RunRecord:
             "task": self.task,
             "status": self.status,
             "error": self.error,
+            "resumable": self.resumable and self.status == "error",
             "patch_file": self.patch_file,
             "created": time.strftime("%H:%M:%S", time.localtime(self.created)),
             "elapsed_s": round((self.finished or time.time()) - self.created, 2),
@@ -191,8 +196,13 @@ class RunManager:
                              printer=printer, emitter=record.emitter)
             FallbackLLMClient.on_fallback = lambda msg: ctx.log_step("llm", msg)
             record.ctx = ctx
-            graph = build_graph(ctx)
-            final = graph.invoke(initial_state(record.task, record.max_attempts))
+            # Checkpoint the graph per node so a mid-run provider failure can be
+            # resumed (see resume()): only the failed node re-executes.
+            graph = build_graph(ctx, checkpointer=MemorySaver())
+            record.graph = graph
+            record.graph_config = {"configurable": {"thread_id": record.run_id}}
+            final = graph.invoke(initial_state(record.task, record.max_attempts),
+                                 record.graph_config)
             record.report = final.get("report", {})
             record.status = final.get("status", "failed")
             record.report.setdefault("timings", ctx.timings())
@@ -209,21 +219,113 @@ class RunManager:
             friendly = friendly_llm_error(e)
             record.status, record.error = "error", friendly
             record.report = {"status": "error", "error": friendly}
+            # Provider failure mid-graph: the checkpoint holds every completed
+            # node, so this run can be resumed from the failed node instead of
+            # starting over. Keep the workspace alive until decide/resume.
+            record.resumable = bool(record.ctx is not None and record.sandbox is not None)
         except Exception as e:  # never lose the log
             record.status, record.error = "error", (
                 f"{type(e).__name__}: the run failed unexpectedly. The run log has the technical details.")
             record.report = {"status": "error", "error": record.error}
         finally:
-            record.finished = time.time()
-            self._save_log(record)
-            watchdog = getattr(self, "_watchdogs", {}).pop(record.run_id, None)
-            if watchdog:
-                watchdog.cancel()
-            if record.status != "awaiting_approval":
-                if record.ctx is None:  # failed before the graph could emit events
-                    record.emitter.emit("done", status=record.status, error=record.error)
+            self._finalize(record)
+
+    def resume(self, run_id: str) -> RunRecord:
+        """Re-invoke a checkpointed run from the node that failed.
+
+        Resume keeps everything that already happened (baseline test, analyse,
+        plan, partial fix work, edits applied in the sandbox). Only the node
+        that raised is re-executed. Raises RunConflictError when the run is
+        not resumable (wrong status, or its workspace was discarded).
+        """
+        record = self._get(run_id)
+        if record.status != "error":
+            raise RunConflictError(f"run {run_id} is {record.status}; only failed runs can be resumed")
+        if (not record.resumable or record.ctx is None or record.graph is None
+                or record.graph_config is None or record.sandbox is None):
+            raise RunConflictError("this run cannot be resumed — its workspace was discarded")
+        with self._lock:
+            active = self._runs.get(self._active) if self._active else None
+            if active and active.status in ACTIVE | HOLD:
+                raise RunBusyError(f"run {active.run_id} is {active.status}; try again later")
+            record.status = "running"
+            record.finished = None
+            record.error = None
+            record.report = {}
+            record.resumable = False
+            self._active = record.run_id
+        settings = load_settings()
+        # Resume should pick up keys/models edited in .env since the failure —
+        # rebuild the LLM chain with the fresh settings instead of reusing the
+        # exhausted one. Tools keep their settings; llm budgets re-read from ctx.
+        try:
+            record.ctx.llm = get_llm(settings)
+            record.ctx.settings = settings
+            record.ctx.log_step("llm", "Rebuilt the LLM chain from the current .env for resume")
+        except LLMError:
+            pass  # keep the original chain; resume will surface a friendly error if it fails
+        watchdog = threading.Timer(settings.run_timeout, self._timed_out,
+                                   args=(record.run_id, settings.run_timeout))
+        watchdog.daemon = True
+        self._watchdogs = getattr(self, "_watchdogs", {})
+        self._watchdogs[record.run_id] = watchdog
+        watchdog.start()
+        thread = threading.Thread(target=self._resume_run, args=(record,),
+                                  daemon=True, name=f"fixora-resume-{record.run_id}")
+        thread.start()
+        return record
+
+    def _resume_run(self, record: RunRecord):
+        ctx = record.ctx
+        assert ctx is not None and record.graph is not None and record.graph_config is not None
+        record.started = record.started or time.time()
+        record.emitter.emit("step", node="llm",
+                            message="Resuming from the point of failure — completed phases are kept")
+        try:
+            final = record.graph.invoke(None, record.graph_config)
+            record.report = final.get("report", {})
+            record.status = final.get("status", "failed")
+            record.report.setdefault("timings", ctx.timings())
+            if record.report:
+                repo_name = record.repo_input.rstrip("/").rsplit("/", 1)[-1]
+                lesson = memory.save_run(repo_name, record.task, record.report)
+                if lesson and record.ctx:
+                    record.ctx.log_step("memory", "lesson recorded for future runs",
+                                        outcome=lesson.get("outcome"))
+        except LLMError as e:
+            friendly = friendly_llm_error(e)
+            record.status, record.error = "error", friendly
+            record.report = {"status": "error", "error": friendly}
+            # Still provider-side: keep the checkpoint so the user can resume again.
+            record.resumable = True
+        except Exception as e:  # never lose the log
+            record.status, record.error = "error", (
+                f"{type(e).__name__}: the run failed unexpectedly. The run log has the technical details.")
+            record.report = {"status": "error", "error": record.error}
+        finally:
+            self._finalize(record)
+
+    def _finalize(self, record: RunRecord):
+        """Shared tail for _run/_resume_run: persist log, cancel watchdog,
+        emit a terminal event, release the one-run slot, clean up unless a
+        resumable checkpoint or an approval is pending."""
+        record.finished = time.time()
+        self._save_log(record)
+        watchdog = getattr(self, "_watchdogs", {}).pop(record.run_id, None)
+        if watchdog:
+            watchdog.cancel()
+        if record.status != "awaiting_approval":
+            # The UI needs a terminal event or it shows 'running' forever.
+            # Graph-completed outcomes already emit done from report_node; the
+            # exception paths (error set, or no ctx) did not — emit one here.
+            if record.ctx is None or record.error is not None:
+                payload = {"status": record.status, "error": record.error}
+                if record.resumable:
+                    payload["resumable"] = True
+                record.emitter.emit("done", **payload)
+            if not record.resumable:
                 self._cleanup(record)
-                self._release(record.run_id)
+            self._release(record.run_id)
 
     # ------------------------------------------------------------- human gate
     def approve(self, run_id: str) -> dict:

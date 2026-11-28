@@ -1,5 +1,14 @@
 import type { DemoRepo, RunDetail, RunStartRequest, RunStartResponse, RunSummary, ServerConfig } from './types';
 
+// API base URL. Empty = same origin (local dev / Docker / FastAPI-served UI).
+// Set VITE_API_BASE at build time (e.g. on Vercel) to point the UI at a
+// separately hosted Fixora backend.
+const API_BASE = ((import.meta.env?.VITE_API_BASE as string | undefined) ?? '').replace(/\/+$/, '');
+
+function url(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -26,7 +35,7 @@ async function parseDetail(response: Response): Promise<string> {
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(url(path), {
       ...init,
       headers: {
         'content-type': 'application/json',
@@ -61,6 +70,9 @@ export const api = {
   async startRun(payload: RunStartRequest): Promise<RunStartResponse> {
     return fetchJson('/runs', { method: 'POST', body: JSON.stringify(payload) });
   },
+  async resumeRun(runId: string): Promise<{ run_id: string; status: string }> {
+    return fetchJson(`/runs/${encodeURIComponent(runId)}/resume`, { method: 'POST', body: '{}' });
+  },
   async approveRun(runId: string): Promise<Record<string, unknown>> {
     return fetchJson(`/runs/${encodeURIComponent(runId)}/approve`, { method: 'POST', body: '{}' });
   },
@@ -70,5 +82,5 @@ export const api = {
 };
 
 export function patchUrl(runId: string): string {
-  return `/runs/${encodeURIComponent(runId)}/patch`;
+  return url(`/runs/${encodeURIComponent(runId)}/patch`);
 }

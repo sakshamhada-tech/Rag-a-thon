@@ -91,6 +91,8 @@ export interface RunDetail {
   task: string;
   status: RunStatus | string;
   error?: string | null;
+  /** true when the run died on a provider error and POST /runs/{id}/resume can continue from the failed node */
+  resumable?: boolean;
   patch_file?: string | null;
   created: string;
   elapsed_s?: number;
