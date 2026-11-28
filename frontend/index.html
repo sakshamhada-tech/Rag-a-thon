@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Fixora</title>
+    <script>
+      (function () {
+        var theme = 'system';
+        try { theme = localStorage.getItem('fixora-theme') || localStorage.getItem('devmate-theme') || 'system'; } catch (e) { theme = 'system'; }
+        var resolved = theme;
+        if (theme === 'system') {
+          var prefersDark = false;
+          try { prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { prefersDark = false; }
+          resolved = prefersDark ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = resolved;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

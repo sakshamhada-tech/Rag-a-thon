@@ -1,5 +1,19 @@
 # Secrets
 .env
+.env.*
+!.env.example
+.envrc
+.netrc
+.pypirc
+.npmrc
+.git-credentials
+id_rsa
+id_ed25519
+id_ecdsa
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Python
 __pycache__/
@@ -10,6 +24,11 @@ venv/
 
 # Run logs (keep directory, ignore contents)
 logs/*.json
+logs/*.patch
 
 # Sandbox scratch
 /tmp/
+
+# Frontend
+node_modules/
+frontend/dist/

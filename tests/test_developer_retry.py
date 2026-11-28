@@ -1,12 +1,12 @@
 """Unit tests for the developer tool-calling loop's provider-error handling."""
 import pytest
 
-from devmate.agents.common import RunContext
-from devmate.agents.developer import run_developer
-from devmate.config import Settings
-from devmate.llm import LLMError, LLMResponse
-from devmate.sandbox import Sandbox
-from devmate.tools import build_tools
+from fixora.agents.common import RunContext
+from fixora.agents.developer import run_developer
+from fixora.config import Settings
+from fixora.llm import LLMError, LLMResponse
+from fixora.sandbox import Sandbox
+from fixora.tools import build_tools
 
 
 def _settings():
@@ -25,6 +25,11 @@ def _settings():
         max_attempts=3,
         command_timeout=60,
         max_tool_steps=5,
+        llm_providers="",
+        run_timeout=900,
+        clone_timeout=120,
+        max_repo_mb=50,
+        read_cache_chars=24000,
     )
 
 
@@ -39,7 +44,7 @@ def ctx(tmp_path):
         def __init__(self):
             self.calls = 0
 
-        def chat(self, messages, tools):
+        def chat(self, messages, tools, reasoning_effort=None):
             self.calls += 1
             if self.calls == 1:
                 raise LLMError("Error code: 400 - Tool call validation failed: "
@@ -72,7 +77,7 @@ def test_non_tool_llm_error_raises(tmp_path):
     sb = Sandbox(repo)
 
     class BadLLM:
-        def chat(self, messages, tools):
+        def chat(self, messages, tools, reasoning_effort=None):
             raise LLMError("Error code: 401 - invalid api key")
 
     try:
@@ -83,3 +88,83 @@ def test_non_tool_llm_error_raises(tmp_path):
             run_developer(run_ctx, "analyse", {"task": "find bug"}, "explore")
     finally:
         sb.cleanup()
+
+
+# ---------------------------------------------------------- pseudo-tools
+
+def test_pseudo_tool_calls_are_never_executed(ctx):
+    """A model emitting tool calls like 'json'/'commentary' must be tolerated:
+    the calls are answered with an error tool message and never executed."""
+    from fixora.llm import ToolCall, LLMResponse
+
+    class PseudoToolLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools, reasoning_effort=None):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(text="", tool_calls=[
+                    ToolCall(id="c1", name="json", arguments={"verdict": "approve"}),
+                    ToolCall(id="c2", name="commentary", arguments={"note": "hi"}),
+                ])
+            return LLMResponse(text="summary", tool_calls=[])
+
+    run_ctx, fake = ctx
+    run_ctx.llm = PseudoToolLLM()
+    before = run_ctx.stats.get("tool_calls", 0)
+    text, messages = run_developer(run_ctx, "analyse", {"task": "find bug"}, "explore")
+    assert text == "summary"
+    assert run_ctx.stats.get("tool_calls", 0) == before  # no pseudo-tool ever executed
+    tool_msgs = [m for m in messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 2                        # one error result per bogus call id
+    assert all("not an available tool" in m["content"] for m in tool_msgs)
+
+
+def test_pseudo_tool_repeated_calls_raise_after_cap(tmp_path):
+    """If the model keeps emitting pseudo-tools, stop cleanly with LLMError
+    (the runner maps this to a friendly message + resumable checkpoint)."""
+    from fixora.llm import ToolCall, LLMResponse
+
+    repo = tmp_path / "demo3"
+    repo.mkdir()
+    (repo / "README.md").write_text("# demo\n")
+    sb = Sandbox(repo)
+
+    class AlwaysPseudo:
+        def chat(self, messages, tools, reasoning_effort=None):
+            return LLMResponse(text="", tool_calls=[ToolCall(id="c", name="json", arguments={})])
+
+    try:
+        run_ctx = RunContext(sandbox=sb, settings=_settings(), llm=AlwaysPseudo(),
+                             tools=build_tools(sb, _settings()),
+                             printer=lambda *a, **k: None)
+        with pytest.raises(LLMError, match="unavailable tools"):
+            run_developer(run_ctx, "analyse", {"task": "find bug"}, "explore")
+    finally:
+        sb.cleanup()
+
+
+def test_mixed_turn_executes_valid_calls_and_rejects_bogus(ctx):
+    from fixora.llm import ToolCall, LLMResponse
+
+    class MixedLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools, reasoning_effort=None):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(text="", tool_calls=[
+                    ToolCall(id="c1", name="list_tree", arguments={}),
+                    ToolCall(id="c2", name="json", arguments={"x": 1}),
+                ])
+            return LLMResponse(text="done", tool_calls=[])
+
+    run_ctx, fake = ctx
+    run_ctx.llm = MixedLLM()
+    text, messages = run_developer(run_ctx, "analyse", {"task": "find bug"}, "explore")
+    assert text == "done"
+    by_id = {m.get("tool_call_id"): m for m in messages if m["role"] == "tool"}
+    assert '"error"' not in by_id["c1"]["content"]       # real tool executed
+    assert "not an available tool" in by_id["c2"]["content"]  # pseudo-tool answered with error

@@ -1,0 +1,388 @@
+"""Developer agent: tool-calling loops for the analyse, plan and fix nodes.
+
+Each phase has a system prompt (starting with a `PHASE:` marker) and a set of
+allowed tools. The loop runs until the model stops calling tools or the step
+cap is hit; every call goes through the sandboxed tool registry and is logged.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+
+from ..config import MAX_OUTPUT_CHARS
+from ..llm import LLMError
+from ..reasoning import select_reasoning_effort
+from ..retrieval import retriever_for, build_failure_queries
+from ..query_assist import rewrite_queries, rerank
+from .. import memory
+
+_PHASE_ROLES = {"analyse": "Developer", "plan": "Developer", "fix": "Developer", "review": "Reviewer"}
+
+_SYSTEM = """PHASE: {phase}
+You are Fixora's {role} agent working on a Python repo copied into a sandbox.
+Work only with the provided tools. Never invent file contents or test results.
+Be terse. Paths are relative to the repo root. When your task is done, reply
+with your final answer as plain text and do NOT call any more tools.
+Do not re-read files you already have.
+Never emit a tool call named 'json', 'commentary', 'analysis', 'final', 'output_final'
+or any other pseudo-tool — they do not exist. Only the tools listed below exist.
+If you want to answer in JSON, write the JSON object as plain reply text.
+{extra}"""
+
+_PHASE_DETAILS = {
+    "analyse": ("Explore the repo: list the tree, identify entry points, dependencies and "
+                "where the tests live. Use search_semantic to LOCATE code by behaviour, "
+                "search_code for exact strings, read_file for full context. Read only — do not modify anything. "
+                "If you find the bug, do NOT patch it here; describe it in the summary.",
+                ["list_tree", "read_file", "search_code", "get_dependencies",
+                 "retrieve_code", "search_semantic"]),
+    "plan": ("State the suspected root cause and a concrete fix plan. Use search_semantic to LOCATE, "
+             "search_code for exact strings, read_file for full context. Read only — do not modify anything. "
+             "If you are fairly sure how to fix it, describe the exact edit instead of making it.",
+             ["list_tree", "read_file", "search_code", "get_dependencies",
+              "retrieve_code", "search_semantic"]),
+    "fix": ("Use search_semantic to LOCATE code by behaviour, search_code for exact strings, "
+            "read_file for full context; never re-read files already in context. "
+            "Fix the bug using write_file / apply_patch. Prefer small, exact "
+            "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
+            "if unsure. If the failure diagnosis is dependency_missing and the repo declares "
+            "the missing package, call install_dependencies FIRST, then re-check the tests. "
+            "install_dependencies installs only the repo's own declared dependencies and cannot "
+            "take package names; it is safe to call when unsure.",
+            ["read_file", "search_code", "list_tree", "get_dependencies",
+             "write_file", "apply_patch", "install_dependencies",
+             "retrieve_code", "search_semantic"]),
+    "review": ("You are the Reviewer. Inspect changed files with read-only tools if needed. "
+               "Reply in plain text, not JSON: line 1 is APPROVE or REJECT; then one '-' bullet "
+               "per issue; last line 'risk: low|medium|high'. Check for a root-cause fix vs hack, "
+               "weakened/deleted tests, unrelated changes and possible regressions. "
+               "If anything is off, the verdict must be REJECT.",
+               ["list_tree", "read_file", "search_code", "get_dependencies"]),
+}
+
+READONLY = _PHASE_DETAILS["analyse"][1]
+
+
+def run_developer(ctx, phase: str, state: dict, instruction: str,
+                  reasoning_effort: str | None = None) -> tuple[str, list[dict]]:
+    """Run a capped tool-calling loop; returns (final_text, new_messages)."""
+    detail, allowed = _PHASE_DETAILS[phase]
+    allowed_list = ", ".join(allowed)
+    system = _SYSTEM.format(
+        phase=phase,
+        role=_PHASE_ROLES.get(phase, "Developer"),
+        extra=(f"{detail}\nAllowed tools for this phase: {allowed_list}. "
+               "Do not call any other tool, even if you think it is needed later."))
+    schemas = [ctx.tools[n].schema() for n in allowed]
+    new_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": instruction},
+    ]
+    allowed_names = set(allowed)
+    final_text = ""
+    validation_retries = 0
+    pseudo_tool_turns = 0
+    for _ in range(ctx.settings.max_tool_steps):
+        try:
+            budget = _context_budget()
+            resp, llm_ms = ctx.timed_llm(lambda: ctx.llm.chat(
+                _compact_messages(new_messages, budget), schemas,
+                reasoning_effort=reasoning_effort))
+        except LLMError as e:
+            if _is_context_error(e):
+                # Token-limited tiers (e.g. Groq on_demand, 8k TPM) can reject a
+                # legitimate-but-large prompt. One transparent retry with half the
+                # budget; if it still fails, the error propagates to the runner,
+                # which surfaces a friendly message.
+                ctx.printer(f"[ERROR] {phase}: request too large for the model; "
+                            "compacting context and retrying once")
+                ctx.log_step(phase, "request too large for model; compacted context and retrying once")
+                resp, llm_ms = ctx.timed_llm(lambda: ctx.llm.chat(
+                    _compact_messages(new_messages, _context_budget() // 2), schemas,
+                    reasoning_effort=reasoning_effort))
+            elif _is_unavailable_tool_error(e) and validation_retries < 2:
+                validation_retries += 1
+                correction = (
+                    f"The provider rejected a tool call: {e}\n"
+                    f"Only these tools exist in this phase: {allowed_list}. "
+                    "Do not call any other tool — 'json', 'commentary', 'output_final' "
+                    "and similar pseudo-tools are not tools. If you meant to emit JSON, "
+                    "write the JSON object as your reply text. "
+                    "If you meant to edit code, describe the edit instead of calling it now.")
+                ctx.printer(f"[ERROR] {phase} tool-call rejected; retrying with correction "
+                            f"({validation_retries}/2)")
+                ctx.log_step(phase, "unavailable tool call rejected by provider", reason="tool_rejected")
+                new_messages.append({"role": "user", "content": correction})
+                continue
+            else:
+                # Fatal for this run (bad key/model/base URL/tool schema): stop.
+                # The raw provider error stays on the operator console; the
+                # journal/UI get a generic message (provider internals are not
+                # dashboard content).
+                ctx.printer(f"[ERROR] {phase} failed: {e}")
+                ctx.log_step(phase, "llm call failed — see run log for details")
+                raise
+        assistant_msg = {"role": "assistant", "content": resp.text}
+        if resp.tool_calls:
+            assistant_msg["tool_calls"] = [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                for tc in resp.tool_calls]
+        new_messages.append(assistant_msg)
+        if resp.text:
+            ctx.printer(f"[{phase.upper()}] {resp.text.strip()[:500]}")
+        if not resp.tool_calls:
+            final_text = resp.text.strip()
+            break
+        bogus = [tc for tc in resp.tool_calls if tc.name not in allowed_names]
+        if bogus:
+            pseudo_tool_turns += 1
+            bogus_names = ", ".join(sorted({tc.name for tc in bogus}))
+            ctx.printer(f"[WARN] {phase}: ignored tool call(s) not available in this phase: {bogus_names}")
+            ctx.log_step(phase, f"ignoring unavailable tool call(s): {bogus_names}",
+                         reason="pseudo_tool")
+        for tc in resp.tool_calls:
+            if tc.name not in allowed_names:
+                # Never executed: models on some providers emit pseudo-tools such as
+                # 'json'/'commentary' instead of replying with text. Answer every call
+                # id with an error result so the conversation stays valid.
+                new_messages.append({"role": "tool", "tool_call_id": tc.id,
+                                     "name": tc.name,
+                                     "content": json.dumps({
+                                         "error": f"'{tc.name}' is not an available tool in this "
+                                                  f"phase. Available tools: {allowed_list}. "
+                                                  "If you meant to output JSON, write the JSON "
+                                                  "object as plain reply text."})})
+                continue
+            result = ctx.execute_tool(phase, tc.name, tc.arguments)
+            new_messages.append({"role": "tool", "tool_call_id": tc.id,
+                                 "name": tc.name, "content": result[:MAX_OUTPUT_CHARS]})
+        if pseudo_tool_turns > 3:
+            raise LLMError(f"{phase}: model repeatedly called unavailable tools "
+                           f"({bogus_names}) — stopping the turn")
+    else:
+        final_text = final_text or "[stopped: tool-step cap reached]"
+        ctx.log_step(phase, final_text)
+    return final_text, new_messages
+
+
+_CONTEXT_ERR = re.compile(
+    r"(413|request too large|too many tokens|reduce your message|"
+    r"context length|context window|maximum context)", re.I)
+
+# Groq's on_demand tier serves openai/gpt-oss-120b with an 8,000 TPM limit, so
+# a legitimate but large fix prompt (RAG block + already-read replay + tool
+# loop history) can be rejected outright. Keep every call comfortably below
+# that by compacting per call; the full history is still preserved for the
+# final state/logs — compaction happens only on the wire.
+def _context_budget() -> int:
+    raw = (os.environ.get("FIXORA_CONTEXT_BUDGET_CHARS") or "18000").strip()
+    try:
+        return max(4000, int(raw))
+    except ValueError:
+        return 18000
+
+
+def _is_context_error(error: Exception) -> bool:
+    """True for 'request too large for the model' style rejections."""
+    return bool(_CONTEXT_ERR.search(str(error)))
+
+
+def _message_chars(m: dict) -> int:
+    n = len(str(m.get("content") or ""))
+    for tc in m.get("tool_calls", []) or []:
+        try:
+            n += len(json.dumps(tc, default=str))
+        except TypeError:
+            n += len(str(tc))
+    return n + 16
+
+
+_ELISION_NOTE = ("[Earlier steps were elided to fit the model's context window. "
+                 "Re-read a file if you need its contents again.]")
+
+
+def _compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
+    """Fit `messages` into budget_chars by dropping the middle of the conversation.
+
+    Always keeps the system prompt and the opening instruction, plus a
+    contiguous tail of the loop. An orphaned `tool` message is never left at
+    the cut boundary (the OpenAI API rejects a tool message without its
+    assistant call). The input list is not mutated.
+    """
+    total = sum(_message_chars(m) for m in messages)
+    if total <= budget_chars or len(messages) <= 2:
+        return list(messages)
+    head, rest = messages[:2], messages[2:]
+    remaining = max(0, budget_chars - sum(_message_chars(m) for m in head)
+                    - len(_ELISION_NOTE) - 32)
+    acc, start = 0, len(rest)
+    for i in range(len(rest) - 1, -1, -1):
+        cost = _message_chars(rest[i])
+        if acc + cost > remaining:
+            break
+        acc += cost
+        start = i
+    suffix = rest[start:]
+    while suffix and suffix[0].get("role") == "tool":
+        suffix = suffix[1:]
+    if len(suffix) == len(rest):
+        return list(messages)
+    return head + [{"role": "user", "content": _ELISION_NOTE}] + suffix
+
+
+def _is_unavailable_tool_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return bool(re.search(r"(not in request\.tools|tool call validation failed|attempted to call tool|unknown tool)", text))
+
+
+def _clip(text: str, limit: int = 900) -> str:
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _memory_block(ctx, state: dict) -> str:
+    hints = memory.relevant_hints(state, k=2)
+    block = memory.hints_block(hints)
+    if hints:
+        ctx.log_step("memory", f"prior knowledge applied ({len(hints)} lesson(s))",
+                     lessons=[{"symptom": h.get("symptom"), "score": h.get("score")} for h in hints])
+        ctx.emitter.emit("memory", applied=True,
+                         lessons=[{"symptom": h.get("symptom"), "root_cause": h.get("root_cause"),
+                                   "fix_summary": h.get("fix_summary"), "outcome": h.get("outcome"),
+                                   "score": h.get("score")} for h in hints])
+    return block
+
+
+def _rag_block(ctx, state: dict, k: int = 5) -> str:
+    """Hybrid RAG block (failure-driven queries + hybrid retrieval + optional
+    QUERY_REWRITE / RERANK boosters). Returns "" when disabled or empty."""
+    import os
+    flag = (os.environ.get("FIXORA_RAG", "1") or "1").strip().lower()
+    if flag in ("0", "false", "off", "no"):
+        return ""
+    try:
+        retriever = retriever_for(ctx.sandbox)
+        local_queries = build_failure_queries(state)
+        rewritten = rewrite_queries(ctx, state)   # [] when flagged off / unavailable
+        queries = local_queries + [q for q in rewritten if q not in local_queries]
+        query = queries[0] if queries else (state.get("task", "") or "bug")
+        extra = queries[1:]
+        t0 = __import__("time").perf_counter()
+        candidates = retriever.top_candidates(query, extra_queries=extra, k=15)
+        chunks, rerank_applied = rerank(ctx, state, candidates, k=k)
+        stats = retriever.stats()
+        build_ms = stats.get("build_ms", 0.0)
+        ctx.log_step("rag",
+                     f"retrieved {len(chunks)} chunks ({stats.get('backend')})",
+                     queries=queries, files=[c["path"] for c in chunks],
+                     rerank_applied=rerank_applied, backend=stats.get("backend"),
+                     chunks_indexed=stats.get("chunks", 0), build_ms=build_ms,
+                     latency_ms=round((__import__("time").perf_counter() - t0) * 1000, 1))
+        ctx.emitter.emit("retrieval", queries=queries,
+                         rerank_applied=rerank_applied, backend=stats.get("backend"),
+                         chunks_indexed=stats.get("chunks", 0), build_ms=build_ms,
+                         chunks=[{"path": c["path"], "symbol": c.get("symbol", ""),
+                                  "kind": c.get("kind", ""),
+                                  "start_line": c["start_line"], "end_line": c["end_line"],
+                                  "score": c["score"], "snippet": _clip(c["text"], 700)}
+                                 for c in chunks])
+    except Exception as e:
+        ctx.log_step("rag", f"retrieval unavailable: {e}")
+        return ""
+    if not chunks:
+        return ""
+    blocks = []
+    for c in chunks:
+        tag = f"{c['path']}:{c['start_line']}-{c['end_line']}"
+        symbol = c.get("symbol") or ""
+        blocks.append(f"--- {tag} :: {c.get('kind', '')} {symbol} (score {c['score']}) ---\n{_clip(c['text'], 600)}")
+    return ("\n\nRelevant code retrieved from the repo (use as pointers; verify with "
+            "read_file before editing):\n" + "\n\n".join(blocks))
+
+
+def _diagnosis_block(state: dict) -> str:
+    """Render the structured diagnosis for prompt context (truncated)."""
+    r = state.get("last_test_result") or {}
+    diag = r.get("diagnosis") or {}
+    if not diag:
+        return ""
+    lines = ["", "", "Failure diagnosis: " + str(diag.get("label") or diag.get("category")),
+             "Summary: " + str(diag.get("summary", ""))]
+    if diag.get("module"):
+        lines.append(f"Missing/offending module: {diag['module']}")
+    if diag.get("files"):
+        lines.append("Files involved: " + ", ".join(str(f) for f in diag["files"]))
+    if diag.get("exceptions"):
+        lines.append("Exceptions seen: " + ", ".join(str(e) for e in diag["exceptions"]))
+    lines.append("Guidance: " + str(diag.get("guidance", "")))
+    return "\n".join(lines)
+
+
+def _test_context(state: dict) -> str:
+    """Render the last test result for prompt context (truncated)."""
+    r = state.get("last_test_result")
+    if not r:
+        return ""
+    failing = ", ".join(r.get("failing_tests", [])) or "none"
+    tail = r.get("output_tail", "")[-1600:]
+    return (f"\n\nLast test run: {r.get('passed', 0)} passed, {r.get('failed', 0)} failed, "
+            f"{r.get('errors', 0)} errors. Failing: {failing}{_diagnosis_block(state)}\n"
+            f"Traceback tail:\n{tail}")
+
+
+def analyse_node(ctx, state: dict) -> dict:
+    instruction = (f"Task: {state['task']}\n\nExplore the repo and write a short repo_summary: "
+                   "layout, entry points, dependencies, where the tests live."
+                   + _rag_block(ctx, state, k=4)
+                   + _memory_block(ctx, state))
+    effort = select_reasoning_effort("analyse", state)
+    summary, msgs = run_developer(ctx, "analyse", state, instruction + ctx.already_read_block(),
+                                  reasoning_effort=effort)
+    ctx.log_step("analyse", "repo summary ready")
+    return {"repo_summary": summary, "messages": state.get("messages", []) + msgs}
+
+
+def plan_node(ctx, state: dict) -> dict:
+    instruction = (f"Task: {state['task']}\n\nRepo summary:\n{state.get('repo_summary', '')}\n\n"
+                   "State the suspected root cause and the step-by-step fix plan. Do not edit yet."
+                   + _rag_block(ctx, state, k=5) + ctx.already_read_block())
+    effort = select_reasoning_effort("plan", state)
+    plan, msgs = run_developer(ctx, "plan", state, instruction, reasoning_effort=effort)
+    ctx.log_step("plan", "plan ready", plan=plan)
+    return {"plan": plan, "messages": state.get("messages", []) + msgs}
+
+
+def fix_node(ctx, state: dict) -> dict:
+    attempts = state.get("attempts", 0) + 1
+    if attempts > 1:
+        ctx.printer(f"[RETRY {attempts - 1}] re-entering fix with failing output in context")
+        ctx.emitter.emit("retry", attempt=attempts, retry_index=attempts - 1)
+        ctx.log_step("fix", f"retry {attempts - 1}", retry_index=attempts - 1)
+    ctx.stats["retries"] = max(ctx.stats.get("retries", 0), attempts - 1)
+    instruction = (f"Task: {state['task']}\n\nRepo summary:\n{state.get('repo_summary', '')}\n\n"
+                   f"Plan:\n{state.get('plan', '')}\n"
+                   f"{_test_context(state)}{_rag_block(ctx, state, k=5)}\n\n"
+                   f"Attempt {attempts} of {state.get('max_attempts', 3)}. "
+                   "Fix the bug now. Do not modify tests."
+                   + ctx.already_read_block())
+    effort = select_reasoning_effort("fix", state, attempt_number=attempts)
+    _, msgs = run_developer(ctx, "fix", state, instruction, reasoning_effort=effort)
+    edits = state.get("edits_made", []) + _edits_from(msgs)
+    ctx.log_step("fix", f"attempt {attempts} complete", edits=len(edits))
+    return {"attempts": attempts, "edits_made": edits,
+            "messages": state.get("messages", []) + msgs}
+
+
+def _edits_from(messages: list[dict]) -> list[dict]:
+    """Extract successful file edits from tool messages for the report."""
+    edits = []
+    for m in messages:
+        if m.get("role") != "tool" or m.get("name") not in ("apply_patch", "write_file"):
+            continue
+        try:
+            payload = json.loads(m["content"])
+        except (ValueError, TypeError):
+            continue
+        if payload.get("ok"):
+            edits.append({"tool": m["name"], "path": payload.get("path")})
+    return edits

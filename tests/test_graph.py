@@ -1,6 +1,6 @@
-"""Unit tests for the graph's decide() conditional edge and pytest parsing."""
-from devmate.agents.graph import decide
-from devmate.tools.test_tools import _parse_counts, _parse_failing
+"""Unit tests for the graph's routing functions and pytest output parsing."""
+from fixora.agents.graph import after_test, after_review
+from fixora.tools.test_tools import _parse_counts, _parse_failing
 
 SAMPLE = """..........FFF.                                                           [100%]
 =================================== FAILURES ===================================
@@ -20,22 +20,34 @@ def _state(passed=0, failed=0, errors=0, status="failed", attempts=1, max_attemp
             "attempts": attempts, "max_attempts": max_attempts}
 
 
-def test_decide_passes_to_report():
-    assert decide(_state(passed=14, failed=0, status="passed", attempts=1)) == "report"
+def test_after_test_passes_to_review():
+    assert after_test(_state(passed=14, failed=0, status="passed", attempts=1)) == "review"
 
 
-def test_decide_retries_fix_when_budget_remains():
-    assert decide(_state(failed=3, attempts=1, max_attempts=3)) == "fix"
-    assert decide(_state(failed=3, attempts=2, max_attempts=3)) == "fix"
+def test_after_test_retries_fix_when_budget_remains():
+    assert after_test(_state(failed=3, attempts=1, max_attempts=3)) == "fix"
+    assert after_test(_state(failed=3, attempts=2, max_attempts=3)) == "fix"
 
 
-def test_decide_reports_when_budget_exhausted():
-    assert decide(_state(failed=3, attempts=3, max_attempts=3)) == "report"
+def test_after_test_reports_when_budget_exhausted():
+    assert after_test(_state(failed=3, attempts=3, max_attempts=3)) == "report"
 
 
-def test_decide_errors_count_as_failure():
-    assert decide(_state(passed=10, failed=0, errors=1, attempts=3, max_attempts=3)) == "report"
-    assert decide(_state(passed=10, failed=0, errors=1, attempts=1, max_attempts=3)) == "fix"
+def test_after_test_errors_count_as_failure():
+    assert after_test(_state(passed=10, failed=0, errors=1, attempts=1, max_attempts=3)) == "fix"
+    assert after_test(_state(passed=10, failed=0, errors=1, attempts=3, max_attempts=3)) == "report"
+
+
+def test_after_review_approval_reports():
+    state = {"review": {"verdict": "approve"}, "attempts": 1, "max_attempts": 3}
+    assert after_review(state) == "report"
+
+
+def test_after_review_rejection_retries_then_reports():
+    assert after_review({"review": {"verdict": "reject"}, "attempts": 1,
+                         "max_attempts": 3}) == "fix"
+    assert after_review({"review": {"verdict": "reject"}, "attempts": 3,
+                         "max_attempts": 3}) == "report"
 
 
 def test_parse_counts_from_pytest_q_output():

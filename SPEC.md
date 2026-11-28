@@ -1,126 +1,355 @@
-# DevMate — SPEC
+# Fixora — SPEC
 
 ## Architecture note
 
-DevMate Phase 1 is a minimal but real end-to-end agent loop, CLI-only:
+Fixora Phase 4 keeps the Phase 2 agent loop and the Phase 3 web UI/demo surface, and adds a failure taxonomy, sandboxed dependency installation and regression hardening for in-place edits. Phase 3 added a React/TypeScript web UI, backend demo/config endpoints, same-origin static serving and a Docker image.
+
+Phase 2 kept the Phase 1 sandboxed loop and added caching, a reviewer
+agent, a human approval gate, a FastAPI/SSE server and strict GitHub input
+handling:
 
 ```
-python -m devmate.cli --repo ./demo_repo --task "Find and fix the failing tests"
+python -m fixora.cli --repo ./demo_repo --task "Find and fix the failing tests"
         │
         ▼
-┌────────────────────────────────────────────────────────────┐
-│ cli.py: load settings, create Sandbox (temp copy of repo), │
-│ build tools bound to sandbox, build & invoke LangGraph     │
-└────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│ runner.py: load settings, clone/copy repo into │
+│ temp workspace, build tools + RunContext,      │
+│ build & invoke LangGraph, hold sandbox until   │
+│ human approval                                │
+└───────────────────────────────────────────────┘
         │
         ▼
    LangGraph StateGraph (agents/graph.py)
-   baseline(test) → analyse → plan → fix → test → decide ─┐
-        ▲                                      │         │
-        └──────────── retry (failing output in context) ─┘
-                                               ▼
-                                            report → END
+   baseline(test) → analyse → plan → fix → test ─┐
+        ▲                                │ pass │
+        │                                ▼       │
+        │                              review    │
+        │                                │       │
+        └──────── retry (fix) ◄──────────┘       │
+                  │ approve                      │
+                  ▼                              ▼
+                report (awaiting_approval / failed) → END
 ```
 
 **Shared state** (`AgentState`, TypedDict): `task`, `repo_summary`, `plan`,
 `attempts`, `max_attempts` (default 3), `baseline_test_result`,
-`last_test_result`, `edits_made`, `diff`, `status`, `report`, `messages`.
+`last_test_result`, `edits_made`, `diff`, `review`, `status`, `report`,
+`messages`.
 
 **Nodes**
 1. `baseline` — runs `run_tests` once BEFORE any edit via the tester code path;
    records `baseline_test_result` so the report can show before/after.
-2. `analyse` — Developer agent, read-only tools (`list_tree`, `read_file`,
-   `search_code`, `get_dependencies`); writes `repo_summary`.
+2. `analyse` — Developer agent, read-only tools; writes `repo_summary`.
+   `repo_summary` and already-read file contents are passed into plan/fix.
+   Prompt rule: "Do not re-read files you already have."
 3. `plan` — Developer agent; states suspected root cause + fix plan.
-4. `fix` — Developer agent; edit tools (`write_file`, `apply_patch`) with a
-   capped tool-calling loop (`MAX_TOOL_STEPS`, default 12). Increments
-   `attempts`. Retry context = the failing output appended as a user message.
-5. `test` — Tester node; runs the real suite via `run_tests`; result is parsed
-   from pytest output (pass/fail counts, failing test names, trimmed traceback).
-   Never based on LLM claims.
-6. `decide` (conditional edge) — tests pass → `report`; fail and
-   `attempts < max_attempts` → `fix`; else → `report`.
-7. `report` — final summary: root cause (plan), edits made, unified diff
-   (original repo → workspace), tests before/after, attempts, status.
+4. `fix` — Developer agent; edit tools with a capped tool-calling loop
+   (`MAX_TOOL_STEPS`, default 12). Retry context = the failing output appended as
+   a user message. Reviewer rejections are appended as user messages with the
+   reviewer issues; an attempt re-enters here and counts toward `max_attempts`.
+5. `test` — Tester node; runs the real suite via `run_tests`; parsed pytest
+   counts/failing tests. Never based on LLM claims.
+6. `review` — Reviewer agent (read-only tools); strict JSON verdict:
+   `{"verdict":"approve|reject","issues":[...],"risk":"low|medium|high","summary":"..."}`.
+   Checks root cause vs hack, weakened/deleted tests, unrelated changes,
+   regressions. **Hard code rule**: a diff touching `tests/` is flagged; if
+   assertions/test functions were removed or loosened, the reviewer is forced
+   to reject regardless of LLM output. If a provider rejects the tool-enabled
+   reviewer pass because the model emits pseudo-tools such as `json` or
+   `commentary`, the node retries the verdict with no tools exposed and the
+   diff in the prompt; the attempt is marked `fallback_used` in the review.
+7. `report` — `awaiting_approval` when tests pass AND reviewer approves;
+   otherwise `failed`. The report carries before/after test counts, attempts,
+   edits, diff, review, timings (LLM duration, tool duration, cached hits,
+   retries, total wall time).
 
-**Sandbox** (`sandbox.py`): `tempfile.mkdtemp` copy of the target repo
-(excluding `.git`, venvs, caches). `resolve()` rejects absolute paths, `..`
-escapes, null bytes and symlink escapes (via `realpath` + containment check).
-`run()` allows only `python -m pytest|py_compile|unittest`, no shell, with a
-timeout (default 60s), captured + truncated I/O (8000 chars), and a regex
-allowlist for arguments plus a defense-in-depth containment check. `diff()`
-produces the unified diff via `difflib`.
+**Human approval gate** (`runner.py`): the sandbox is kept alive after `report`.
+Status is `awaiting_approval`; nothing touches the original repo. CLI `--yes`
+or `POST /runs/{id}/approve`:
+- local repo → changed/new files copied back, deleted files removed;
+- GitHub clone → a patch file is written to `logs/<run_id>.patch` (no push, no PR).
+`POST /runs/{id}/reject` marks the run `rejected` and cleans up without any
+writes. `POST /runs/{id}/approve`/`reject` on a non-`awaiting_approval` run
+returns 409.
 
-**Tools** return size-limited, structured results; errors come back as
-`{"error": ...}` payloads, never exceptions. `apply_patch` uses exact-match
-replacement and fails unless `old_str` occurs exactly once.
+**Server** (`api.py`): `POST /runs {repo, task}` (GitHub URLs only, validated,
+public; local paths rejected with 400), `GET /runs/{id}/events` (SSE replay +
+live stream of `step`, `tool_call`, `tool_result` (truncated), `test_result`,
+`review_verdict`, `retry`, `awaiting_approval`, `done`, ...), `GET /runs/{id}`,
+`POST /runs/{id}/approve`, `POST /runs/{id}/reject`, `GET /runs/{id}/patch`,
+`GET /runs`. CORS enabled; one run at a time per server (429 otherwise);
+`RUN_TIMEOUT` watchdog; state in memory + JSON log in `logs/`.
 
-**LLM wrapper** (`llm.py`): neutral internal message format; native tool/function
-calling. `AnthropicClient` (messages API + `tool_use` blocks), `OpenAIClient`
-(chat.completions + `tools`), Grok/xAI and Groq Cloud (both via `OpenAIClient`
-with `XAI_BASE_URL` / `GROQ_BASE_URL`) selected by `LLM_PROVIDER`; model/keys
-from `.env`. Response parsing tolerates dict- or object-style SDK payloads
-(Groq returns tool-call objects that are not always SDK-typed). `MockClient` (`LLM_PROVIDER=mock`) is a deterministic offline
-provider for pipeline smoke tests only — no LLM, no reasoning.
-`python -m devmate.cli --list-models` lists model IDs visible to the configured
-key (OpenAI-compatible providers and Anthropic) so you can fix `GROQ_MODEL`
-when Groq retires/free-tier-blocks a model. Fatal LLM errors (bad key/model)
-abort the run instead of retrying all attempts with no edits.
+**GitHub input** (`github.py`): only `https://github.com/<owner>/<repo>`
+(optional `.git`/trailing slash) is accepted; other hosts, SSH, `file://` and
+local paths are rejected. Repos are `git clone --depth 1` with a timeout
+(`CLONE_TIMEOUT`, default 120s) and a size cap (`MAX_REPO_MB`, default 50 MB);
+`.git` is discarded after the size check.
 
-**Demo repo** (`demo_repo/`, "swiftcart"): shopping-cart / bulk-discount
-calculator, stdlib-only, 14 tests. Exactly 3 tests fail on one planted logic
-bug (money rounding), requiring the agent to read code — no hints in comments,
-test names, or README. The bug is not weakened or touched by the harness; the
-agent must fix the source.
+**Tool-call caching** (`agents/common.py`): identical tool calls (same tool +
+normalized args) in one run hit an in-memory cache and return the previous
+result marked `[CACHED]`. Any successful `write_file`/`apply_patch` bumps a
+generation counter, invalidating the cache (and dropping that path from the
+"already read" replay). This is per-run, not persisted across runs.
 
-**Logging**: every step, tool call and result is appended to
-`logs/<timestamp>.json` (gitignored); CLI prints live `[ANALYSE] [PLAN]
-[TOOL CALL ...] [TEST] [RETRY n] [REPORT]` lines and exits 0/1.
+**Tool-argument validation** (`tools/__init__.py`): declared types are checked
+before dispatch (`integer` excludes `bool`); missing required args and type
+mismatches are returned as `{"error": ...}` payloads, never raised. `read_file`
+accepts `start_line`/`line_start`/`start` and `end_line`/`line_end`/`end`.
+
+**Timings**: `RunContext.timed_llm` records per-call LLM duration;
+`execute_tool` records per-call tool duration; `fix_node` emits `retry` events
+and counts them; `ctx.timings()` aggregates everything into the report and the
+JSON run log. `[CACHED ...]` steps carry `cached: true` and zero duration.
+
+**LLM wrapper** (`llm.py`): same facade as Phase 1 plus:
+- `LLM_PROVIDERS` fallback chain (`name` entries reuse per-provider env, or
+  `label|base_url|key|model`); switches on 429/timeout/5xx/connection errors
+  with exponential backoff and a `[LLM FALLBACK]` log line. Non-retryable 4xx
+  (e.g. bad schema) is raised immediately — it is never masked by fallback.
+- `reasoning_effort` is chosen dynamically by `fixora/reasoning.py` when the
+  model supports it; `max_tokens` capped at 4096.
+- `MockClient` extended: plans, reviews (auto-approve JSON) and can drive
+  `demo_repo_hard` through the two-bug retry sequence offline.
+
+**Demo repos**
+- `demo_repo/` ("swiftcart") — Phase 1 fixture: one rounding bug, 3 failing tests.
+- `demo_repo_hard/` ("ledgerline") — Phase 2 fixture: banker's rounding in
+  `money.py` **and** `quantity > 25` vs `>= 25` in `discounts.py`. Baseline:
+  9 passed, 5 failed. One fix leaves 3 tests failing; the retry loop must fix
+  the tier bug too. No comments hint at either bug.
+
+**Logging**: every step, tool call, result and event is appended to
+`logs/<timestamp>-<run_id>.json` (gitignored); CLI prints live
+`[ANALYSE] [PLAN] [TOOL CALL ...] [CACHED ...] [TEST] [RETRY n] [REVIEW]
+[AWAITING APPROVAL] [DONE]` lines.
 
 ## Status
 
-### Done (Phase 1)
-- [x] Sandbox: temp-copy workspace, path-escape protection (incl. symlinks),
-      allowlisted runner, timeout, truncation, unified diff
-- [x] Tools: `list_tree`, `read_file`, `search_code`, `get_dependencies`,
-      `write_file`, `apply_patch` (unique-anchor), `run_tests` (parsed output)
-- [x] LangGraph loop: baseline → analyse → plan → fix → test → decide → report,
-      with retry on failing tests and `max_attempts` budget
-- [x] Provider-agnostic LLM wrapper (Anthropic + OpenAI + Grok/xAI + Groq Cloud) with native tool calling
-- [x] CLI with live step printing, JSON run logs, exit code 0/1
-- [x] Demo repo with one planted bug, 3 failing tests (verified at baseline)
-- [x] Unit tests: sandbox path-escape/symlinks/allowlist, apply_patch
-      uniqueness, decide() routing, pytest-output parsing (48 tests, all pass)
-- [x] End-to-end CLI run verified (offline mock provider; see note below)
+### Done (Master completion pass)
+
+- [x] **DevMate → Fixora rename** verified repo-wide (mechanical); no functional change.
+- [x] **RAG v2 (Fixora retrieval)**: AST-aware chunking (`function`/`class`/`method`/
+      `test` symbols + module chunk + 30-line windows fallback), hybrid **BM25 + local
+      vectors** merged via **Reciprocal Rank Fusion (k=60)**, BM25 via `rank_bm25`
+      (internal Okapi fallback), vector scoring via in-memory cosine scan (documented
+      FAISS deviation), failure-driven query building, Groq query-rewrite and rerank
+      (config-flagged, default ON, cached, graceful local fallback — never blocks a run),
+      big-repo mode (code+tests only over a size threshold), `file_bytes`/`build_ms`
+      stats, rich `retrieval` UI events (queries, backend, chunks, snippets).
+- [x] **Embeddings, honest**: default = local deterministic hashed bag-of-n-grams
+      (384-dim), zero download; optional `fastembed==0.9.1` + **BAAI/bge-small-en-v1.5**
+      behind `FIXORA_EMBEDDER=fastembed` (Dockerfile attempts install/prefetch at build
+      time, falls back silently otherwise). Groq has no embeddings endpoint; Gemini
+      free embeddings considered and rejected (zero-cost/no-keys guarantee).
+- [x] **Cross-run memory** (`fixora/memory.py`): JSON lesson store
+      (`logs/memory.json`, FIFO cap 50, redacted), cosine recall top-2 (≥0.15) with
+      the RAG embedder, labelled "hints — NOT ground truth" in analyse; save on run
+      outcome; `FIXORA_MEMORY=0` kill switch; `FIXORA_MEMORY_PATH` override;
+      `GET /memory`; amber "Memory" row + expandable lesson cards in the UI;
+      `memory` run events; never raises into a run.
+- [x] **LLM token usage**: provider-reported `usage` captured on every response
+      and logged (`[LLM USAGE] prompt/completion/total`) for Groq-frugal ops.
+- [x] **Dependency install size limit**: pip `--target` tree checked after install,
+      `FIXORA_INSTALL_MAX_MB` (default 512 MB) — oversize install fails closed.
+- [x] **API**: `GET /memory`; `/memory` listed in the JSON endpoint directory;
+      stale `Phase 3` service string fixed.
+- [x] **UI**: retrieval + memory events render (icon, queries, index stats,
+      expandable chunk snippets, lesson cards); `frontend/dist` rebuilt; `/health`,
+      `/config`, `/demos`, `/memory` smoke-checked via TestClient.
+- [x] Tests added: AST chunking, syntax-error fallback, hybrid retrieval,
+      failure-driven queries, query-rewrite/rerank error+invalid-JSON fallbacks,
+      rerank dominance skip, memory roundtrip/disabled, analyse-time memory injection
+      with events — suite now **150 passing**.
+- [x] Docs: README (problem/solution, full tech-stack enumeration, team, RAG v2,
+      memory, security), ARCHITECTURE.md (Mermaid agent loop + retrieval + memory),
+      DEMO.md (3-minute script, matrices, honesty list), SLIDES_OUTLINE.md.
+
+### Honest limits of this pass
+
+- **Public-repo verification (2026-11-27, mock, this sandbox)**: cloned and ran
+  **more-itertools** (`https://github.com/more-itertools/more-itertools`) end to end —
+  772 passed at baseline, agent had nothing to fix, run stopped at
+  `awaiting_approval` with an empty diff, gate held, repo untouched. Cloned and ran
+  **tqdm** (`https://github.com/tqdm/tqdm`) — its pytest config requires plugins absent
+  from a stock environment (`--asyncio-mode=strict` ⇒ pytest-asyncio; also
+  `timeout` ⇒ pytest-timeout). The classifier previously called this `unknown`; a new
+  rule reports it as `dependency_missing` with the plugin name, verified live. With
+  `pip install pytest-asyncio pytest-timeout`, tqdm's suite collects (169 passed, 10
+  skipped — tkinter absent) and Fixora runs it to `awaiting_approval` with an empty
+  diff. Both plugins were **uninstalled afterwards to restore the declared
+  environment**. Real-bug repair on a public repo remains unproven — neither public
+  fixture had a failing test.
+- **Docker still not built here** (no docker binary in the sandbox) — the image is
+  written, with best-effort fastembed prefetch and fallback, but `docker build` is
+  unverified. Say so in the demo; run it where Docker exists.
+- **Retrieval ranking is hybrid-lexical by default** — module/window chunks can
+  outrank the exact buggy function on the demos; treat retrieval as narrowing, not proof.
+- **Cross-run memory writes outcome-derived lessons** — a wrong outcome cached as a
+  lesson is possible; mitigation is similarity ranking + clear labelling, not truth.
+- **No new real-provider (Groq) end-to-end run** — no key exists in the build sandbox;
+  everything offline is `mock`-verified. Tokens are N/A in this environment.
+- **Test→source linking and failing-test-first indexing** are not implemented
+  (big repos index code+tests only).
+
+### Done (Phase 5)
+
+- [x] Local, offline RAG (`fixora/rag.py`): BM25 retrieval over 30-line
+  line-window chunks with 10-line overlap; snake_case/camelCase/digit-aware
+  tokeniser; path/line-aware output; index auto-rebuild on any repo change
+  (signature by relpath+mtime+size); no embeddings/network/keys/extra deps.
+- [x] Retrieval grounds the loop: top chunks (k=4 analyse, k=5 plan/fix) are
+  injected into the prompt, a `retrieve_code` tool is available in analyse,
+  plan and fix phases, and every retrieval is logged as a `rag` step for the
+  timeline. `FIXORA_RAG=0` disables it.
+- [x] Deterministic mock hardened: file-selection heuristics now read tool
+  outputs only (retrieval blocks in instructions can no longer steer target
+  selection) — all four demos reach `awaiting_approval` with RAG on (2 attempts
+  for import/hard demos, 1 for swiftcart/syntax).
+- [x] RAG end-to-end verified offline (mock): retrieval module units, tool
+  round-trip, prompt injection assertions, edit-invalidation test; suite was
+  green at this cut. Superseded by the hybrid RAG in the master completion
+  pass above; neural retrieval not claimed at this cut.
+
+### Done (Phase 4)
+
+- [x] Failure taxonomy (`fixora/diagnostics.py`): classifies real pytest output into `syntax_error`, `dependency_missing`, `import_error`, `collection_error`, `no_tests`, `assertion_failure`, `runtime_error`, `timeout`, `unknown`; never executes the failing code; feeds the fix prompt, run report (`baseline_diagnosis`/`diagnosis`), a `diagnosis` timeline event, and the printer.
+- [x] Dependency errors are actionable: `install_dependencies` tool installs **only** the repo's own declared dependencies (root `requirements.txt`, or validated `[project]` specifiers — no URLs/markers/direct references, no model-named packages) into an isolated temp `--target` (never the host interpreter, never the repo copy), consumed via `PYTHONPATH`; kill switch `FIXORA_ALLOW_DEPENDENCY_INSTALL=0`.
+- [x] Sandbox subprocesses run with a minimal allowlisted environment (host API keys/`FIXORA_API_TOKEN` no longer visible to repo code).
+- [x] `FIXORA_REASONING_EFFORT` env override forces one reasoning level (low|medium|high) for all calls (latency lever on reasoning models); the static complexity heuristic remains the default.
+- [x] Fallback chain is monotonic: a client rejected with a retryable error is abandoned for the rest of the process (key1 → key2 → key3 in `LLM_PROVIDERS` order, never back to an earlier key); when every key is exhausted the run fails with a friendly rate-limit message. Regression tests in `tests/test_fallback_order.py`.
+- [x] Bytecode staleness fix: `PYTHONDONTWRITEBYTECODE=1` for sandbox subprocesses and `__pycache__` invalidation after every edit — same-length edits within the same uint32-truncated mtime second can no longer test stale bytecode (regression test in `tests/test_bytecode_invalidation.py` pins this; it fails without the fix).
+- [x] Two new fixtures: `demo_repo_syntax` (skylark; unterminated f-string, collection blocked) and `demo_repo_import` (meridian; wrong internal import, two-edit fix). Both run to `awaiting_approval` offline via the mock provider.
+- [x] Backend tests extended to 121 passing; frontend `npm run build` passes; `diagnosis` events render in the timeline.
+
+### Done (Phase 3)
+
+- [x] Backend additions: `GET /demos`, `GET /config` (provider/model only), demo runs via `POST /runs {demo_id, task}` with checked-in fixtures untouched (temp copy, patch-only approval), lightweight `GET /runs` summaries, SSE event sequence ids + `Last-Event-ID` replay filter.
+- [x] FastAPI serves `frontend/dist` with an SPA fallback; `/assets` mounted; API routes retain precedence; frontend shell is public when `FIXORA_API_TOKEN` is set, API routes remain protected.
+- [x] Frontend: React + TypeScript + Vite; CSS tokens and light/dark themes; pre-paint theme init; View Transitions theme wipe (bottom→top dark, top→bottom light) with reduced-motion/unsupported fallback; fixed-height shell with internal scroll regions; resizable desktop regions via pointer/keyboard separators (widths persisted); compact footer; three-region layout; tabs; custom diff renderer; SSE client; reducer/context; approval panel.
+- [x] Dockerfile (Node build stage + slim Python runtime with git) and `.dockerignore`.
+- [x] Backend tests extended (121 passing at the Phase 4 cut); frontend `npm run build` passes.
+
+### Done (Phase 2)
+- [x] Tool-call dedupe/cache with `[CACHED]` marker + mutation invalidation
+- [x] `repo_summary` + already-read file contents passed into plan/fix; "Do not
+      re-read files you already have" rule
+- [x] `read_file` aliases (`start_line`/`line_start`/`start`, `end_line`/`line_end`/`end`)
+- [x] Tool-argument validation returning data, not exceptions
+- [x] Per-step timings (LLM call, tool, retries) in run log and report
+- [x] Dynamic `reasoning_effort` (low/medium/high) selected by operation complexity
+      (task keywords, failing-test count, retry number, diff size) in addition to
+      phase defaults; `max_tokens` capped at 4096
+- [x] `LLM_PROVIDERS` fallback chain with exponential backoff + `[LLM FALLBACK]` log
+- [x] Reviewer agent node (read-only tools, strict JSON), hard code rule for
+      `tests/` diffs forcing rejection on removed/loosened assertions
+- [x] Reviewer rejection routes back to fix with issues; counts toward `max_attempts`
+- [x] Human approval gate: `awaiting_approval`; original repo untouched until
+      approve; approve applies diff (local) or writes a patch file (GitHub);
+      reject marks `rejected`; nothing consequential without approval
+- [x] FastAPI server (`fixora/api.py`) with `/runs` POST, `/runs/{id}/events`
+      SSE (replay + live), `GET /runs/{id}`, `POST /approve`, `POST /reject`,
+      `GET /patch`, `GET /runs`; CORS; one run at a time (429); `RUN_TIMEOUT`
+- [x] Strict public GitHub URL validation + shallow clone with timeout/size cap
+- [x] `demo_repo_hard/` fixture (two related bugs across two modules)
+- [x] Unit tests: aliases, argument validation, caching, mutation invalidation,
+      approval gate (no write before approve; approve writes), GitHub URL
+      validator, provider fallback, patch export, reviewer pseudo-tool fallback,
+      reasoning-effort selection, provider-plan secret redaction, sandbox credential
+      exclusion, event/log redaction, owner-only log permissions, API bearer auth —
+      92 tests, all pass
+- [x] Offline end-to-end CLI (`LLM_PROVIDER=mock`) verified on `demo_repo` and
+      `demo_repo_hard` (reaches `awaiting_approval`; two-bug retry observed on
+      `demo_repo_hard`, logs in `logs/`)
+- [x] CLI `--yes` on a scratch copy applied the reviewed diff and left
+      `demo_repo/swiftcart/money.py` untouched
 
 ### Verified evidence
-- Baseline: `3 failed, 11 passed` in `demo_repo` (before any edit).
-- End-to-end (offline `mock` provider): baseline fail → patch `money.py`
-  → `14 passed` → exit 0; original repo untouched (diff applied to temp copy).
-- Unit suite: `48 passed`.
+- Baseline: `demo_repo` 3 failed/11 passed; `demo_repo_hard` 5 failed/9 passed.
+- Offline mock end-to-end: `demo_repo` 1 attempt -> 14 passed ->
+  `awaiting_approval`; `demo_repo_hard` 2 attempts (1 retry) -> 14 passed ->
+  `awaiting_approval`; original fixtures untouched without `--yes`.
+- Unit suite: `150 passed` (Phase 5 RAG + master completion pass).
+- Failure-diagnosis end-to-end (mock, offline): `demo_repo_syntax` 1 attempt -> `awaiting_approval`; `demo_repo_import` 2 attempts -> `awaiting_approval`; checked-in fixtures untouched.
+- `install_dependencies` verified end-to-end against a locally built wheel (offline): failing tests diagnosed `dependency_missing`, isolated `pip --target` install, tests then pass. Public PyPI index path unverified.
+- Frontend production build: `npm run build` passes (TypeScript `--noEmit` + Vite).
+- Live backend smoke in this sandbox with `LLM_PROVIDER=mock`: `GET /` returns the built UI, `/config` and `/demos` return expected JSON; `demo_repo` ran to `awaiting_approval` (11 passed/3 failed before; 14 passed after), approval exported an owner-only patch and the fixture stayed clean; `demo_repo_hard` showed a real retry (`attempt 2`) and reached `awaiting_approval` with 14 passed; reject worked; checked-in demo fixtures remained untouched.
+- The static UI is served by the same FastAPI process that passed the smoke test; SSE events carry `id:` sequence numbers.
+- Security hardening: tracked files/history were audited for obvious token
+  patterns (only placeholder examples found); real `.env` and common credential
+  files are excluded from sandboxes/diffs; startup prints provider labels only;
+  emitted events, command output and known-token patterns are redacted; run logs
+  and approval patches are owner-only; API can require `FIXORA_API_TOKEN` and
+  CORS defaults to localhost origins.
+- Maintainer local Groq run on `demo_repo_hard` (2026-11-28, prompt supplied by
+  maintainer): both bugs were fixed and tests reached `14 passed`, but the
+  reviewer failed because Groq rejected pseudo-tool calls (`json`,
+  `commentary`). This exposed a reviewer robustness bug, fixed by the
+  verdict-only fallback above; that fallback still requires human approval.
+- FastAPI process verified locally: `POST /runs` with a local path returns 400;
+  public GitHub URL returns 202 and streams SSE events replaying the run;
+  local approval covered by unit tests.
 
-### Known limitations / not yet verified
-- **No successful real LLM run yet** — the maintainer's free-tier Groq run
-  failed fast on a 404 because `llama-3.3-70b-versatile` was retired for
-  free/developer tiers on 2026-08-16. Default is now `openai/gpt-oss-120b`;
-  run `--list-models` to pick a visible tool-calling model for your key. The
-  offline mock provider proves the plumbing (sandbox, tools, graph routing,
-  logs, exit codes), NOT that an LLM can solve novel bugs. First real run must
-  use `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
-- Retry loop is exercised by construction (`decide` unit tests) but has not been
-  observed to recover from a failed first attempt with a real model.
-- `run_tests` parses counts with regexes against pytest's summary line; exotic
-  pytest output (warnings-as-errors, `-p no:cacheprovider` noise) may need
-  parser hardening.
-- No cost/token accounting; `MAX_TOOL_STEPS` is the only per-node loop cap.
-- Mock provider is synchronous/deterministic and demo-specific in its patch
-  heuristic; it is not a general stand-in for an LLM.
+### Phase 3/4/5 known limitations / honestly not verified
 
-### Next (Phase 2 candidates)
-- Real-LLM evaluation on a small bug corpus; measure fix rate / attempts.
-- Failure-aware retry: feed structured traceback slices, not just the tail.
-- Reviewer agent + human-approval flow for edits (explicitly out of scope for P1).
-- Web UI / API wrapper around the CLI loop; streaming step events.
-- Token/cost tracking; per-phase model routing.
-- GitHub issue → PR flow (clone, branch, PR creation) instead of temp copies.
-- Harden `run_tests` parsing (junitxml output), add timeout/retry for LLM calls.
+- **RAG is hybrid but lexical-by-default**: BM25 + hashed-bag-of-n-grams vectors fused
+  by RRF (plus optional fastembed neural backend). It matches shared vocabulary, not
+  meaning, unless the fastembed backend is enabled. It is free, offline and
+  deterministic; it is not claimed to beat neural embeddings. Real-provider runs with
+  RAG on are unverified — only the deterministic mock was run end-to-end (all four
+  demos reach `awaiting_approval` with retrieval active).
+- The mock is demo-shaped; the 10–15-defect mega-repo is NOT built yet (the `synthetic`
+  fixture option remains open), so multi-bug capability is unproven, not claimed.
+- Docker was not rebuilt with Phase 4/5 changes.
+- The Phase 4 dependency-install happy path against the public PyPI index was **not** exercised from the test suite (tests are offline); it is verified against a locally built wheel + PYTHONPATH round-trip. Real-provider behaviour for the new fixtures is unverified; only the deterministic mock was run end-to-end. Docker was not rebuilt with Phase 4 changes.
+- No real browser was available in this sandbox, so the View Transitions wipe direction, focus traversal, axe/Lighthouse audit, responsive breakpoints and screenshots were **not visually verified**. The CSS implements the specified clip-path directions; initial theme script and reduced-motion fallback follow the brief.
+- Docker was not installed in this sandbox, so `docker build` / `docker run` could not be executed here; the Dockerfile is written but unbuilt locally.
+- The UI talks to the live FastAPI app through same-origin routes; no `FIXORA_API_TOKEN` browser-auth flow is provided for EventSource (local use should leave the token unset or use an authenticating proxy).
+- Human visual QA still needed for both themes at desktop/tablet/mobile widths and for WCAG AA claims.
+
+### Known limitations / honestly not verified
+- **No Phase 2 real-LLM run in this sandbox** — there is no `.env`/API key here
+  and provider reachability (e.g. `api.groq.com`) was not exercised. The
+  maintainer ran Phase 2 locally on 2026-11-28 against Groq for
+  `demo_repo_hard`; the model fixed both bugs and reached `14 passed`, but the
+  reviewer aborted on Groq-side tool-call validation for pseudo-tools. The
+  reviewer fallback added afterwards is unit-tested only; a fresh real-provider
+  run is required to claim the whole path is green.
+- GitHub end-to-end in the sandbox cloned the public `Rag-a-thon` repo and
+  streamed events successfully; the root pytest suite collected the
+  sub-project `demo_repo/tests`, which fails to import (`swiftcart` lives
+  under `demo_repo/`), so that run failed rather than reaching
+  `awaiting_approval`. The API is designed for standalone Python repos with
+  pytest at the root; approval for GitHub runs (patch export) is covered by a
+  unit test, not by a live public-repo fix.
+- Fallback chain is unit-tested with fake clients (429 -> switch; 400 ->
+  raise), not against real provider outages.
+- `reasoning_effort` is best-effort: providers that do not recognize the
+  parameter may reject it; the wrapper only sends it when the model looks like
+  a reasoning-capable family (gpt-oss, o-/gpt-5, grok-4, qwen3, deepseek-r).
+- CLI redacts `LLM_PROVIDERS` values to provider labels only and empty explicit
+  `label|base_url|key|model` entries fail with a clear model error before API.
+- Redaction is best-effort pattern/exact-value matching, not a DLP system; source
+  code is not secret-scanned on ingest. Keep secrets out of tracked files.
+- One run at a time is process-global; a second concurrent `POST /runs` gets
+  429. State is in-memory + JSON log (no DB, no restart recovery).
+- Run timeout marks the run `timed_out` in the API, but the graph is not
+  forcibly killed mid-tool-call; the watchdog frees the slot and the graph's
+  own tool/LLM timeouts bound the tail.
+- `mock` provider remains deterministic and demo-shaped; it is a plumbing
+  check, not evidence of model capability.
+- `run_tests` parses pytest's summary line with regexes; exotic output may
+  still parse imperfectly.
+
+### Out of scope (Phase 2)
+Frontend UI, deployment, Docker, vector search, PR creation, pushing branches,
+multi-tenant auth, billing/cost accounting. See "Next" in README/SPEC history.
+
+### Phase 3 candidates
+- Real GitHub issue -> branch -> PR flow (clone, branch, commit, PR) behind
+  explicit approval.
+- Real-LLM evaluation on the demo corpus; measure fix rate and reviewer
+  agreement; feed reviewer disagreements back for prompt tuning.
+- Junitxml parsing for `run_tests`; token/cost tracking; per-phase model routing.
+- Persist run state (SQLite) and allow resume of `awaiting_approval` after restart.

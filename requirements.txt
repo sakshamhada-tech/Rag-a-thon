@@ -1,6 +1,12 @@
-# DevMate — Phase 1 (pinned)
+# Fixora (pinned)
 langgraph==1.2.24
 anthropic==2.14.0
 openai==3.60.0
 python-dotenv==1.2.4
 pytest==9.2.0
+fastapi==0.135.2
+uvicorn[standard]==0.43.0
+rank_bm25==0.2.2
+# Optional: enables the fastembed neural embedder (BAAI/bge-small-en-v1.5, one-time ~30 MB download).
+# Without it, Fixora falls back to the pure-stdlib hash embedder automatically.
+fastembed==0.9.1
