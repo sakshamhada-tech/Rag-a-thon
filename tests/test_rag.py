@@ -93,3 +93,42 @@ def test_index_rebuilds_after_edits(tmp_path):
         (dst / "skylark" / "pricing.py").read_text() + "\n# rename_me_xyz_token marker\n")
     after = retr.retrieve("rename_me_xyz_token", k=1)
     assert any(h["path"].endswith("pricing.py") for h in after)
+
+
+# ------------------------------------------------ embedder fail-fast (offline)
+
+def test_offline_embedder_fails_fast_to_hash(monkeypatch):
+    """When the fastembed model is not cached and the hub is unreachable, the
+    embedder must fall back to hash in milliseconds — never paying the ~40 s of
+    library retry sleeps."""
+    import fixora.embeddings as emb_module
+
+    called = {"fastembed": 0}
+
+    class _ExplodingTextEmbedding:
+        def __init__(self, *a, **k):
+            called["fastembed"] += 1
+            raise AssertionError("fastembed must not be invoked when offline+uncached")
+
+    monkeypatch.setattr(emb_module, "_fastembed_model_cached", lambda name: False)
+    monkeypatch.setattr(emb_module, "_network_reachable", lambda *a, **k: False)
+    monkeypatch.setitem(emb_module._embedder_cache, "auto", None)  # bypass memo
+    monkeypatch.delitem(emb_module._embedder_cache, "auto", raising=False)
+    monkeypatch.setenv("FIXORA_EMBEDDER", "auto")
+    monkeypatch.setitem(__import__("sys").modules, "fastembed",
+                        type("M", (), {"TextEmbedding": _ExplodingTextEmbedding}))
+    _, backend = emb_module.get_embedder()
+    assert backend == "hash"
+    assert called["fastembed"] == 0
+
+
+def test_model_cached_detection(tmp_path, monkeypatch):
+    import fixora.embeddings as emb_module
+
+    monkeypatch.setenv("FASTEMBED_HOME", str(tmp_path))
+    cached = tmp_path / "bge-small-en-v1.5" / "snapshots" / "abc"
+    cached.mkdir(parents=True)
+    (cached / "model.onnx").write_bytes(b"\0")
+    assert emb_module._fastembed_model_cached("BAAI/bge-small-en-v1.5") is True
+    (cached / "model.onnx").unlink()
+    assert emb_module._fastembed_model_cached("BAAI/bge-small-en-v1.5") is False

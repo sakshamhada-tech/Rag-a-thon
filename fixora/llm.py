@@ -189,7 +189,8 @@ class AnthropicClient:
         self.model = model
         self.provider_label = "anthropic"
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system") or None
         convo: list[dict] = []
         for m in messages:
@@ -214,7 +215,7 @@ class AnthropicClient:
                      "content": m["content"]}]})
         anthropic_tools = [{"name": t["name"], "description": t["description"],
                             "input_schema": t["parameters"]} for t in tools]
-        kwargs = dict(model=self.model, max_tokens=4096, messages=convo)
+        kwargs = dict(model=self.model, max_tokens=max_tokens or 4096, messages=convo)
         if system:
             kwargs["system"] = system
         if anthropic_tools:
@@ -241,7 +242,8 @@ class OpenAIClient:
         self.provider_label = provider_label
         self.supports_reasoning = _supports_reasoning(model, base_url)
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         oai: list[dict] = []
         for m in messages:
             role = m["role"]
@@ -265,7 +267,7 @@ class OpenAIClient:
         oai_tools = [{"type": "function",
                       "function": {"name": t["name"], "description": t["description"],
                                    "parameters": t["parameters"]}} for t in tools]
-        kwargs: dict = dict(model=self.model, messages=oai, max_tokens=4096)
+        kwargs: dict = dict(model=self.model, messages=oai, max_tokens=max_tokens or 4096)
         if oai_tools:
             kwargs["tools"] = oai_tools
         if reasoning_effort and self.supports_reasoning:
@@ -309,7 +311,8 @@ class MockClient:
                     return mm.group(1).lower()
         return "fix"
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         self._n += 1
         phase = self._phase(messages)
         tool_results = [m for m in messages if m["role"] == "tool"]
@@ -440,7 +443,8 @@ class FallbackLLMClient:
         self.clients = clients
         self._cursor = 0  # index into clients; only ever increases
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         n = len(self.clients)
         last_error: LLMError | None = None
         for idx in range(self._cursor, n):
@@ -448,7 +452,13 @@ class FallbackLLMClient:
             label = getattr(client, "provider_label", f"provider-{idx}")
             for attempt in range(2):
                 try:
-                    resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
+                    try:
+                        resp = client.chat(messages, tools, reasoning_effort=reasoning_effort,
+                                           max_tokens=max_tokens)
+                    except TypeError as exc:
+                        if "max_tokens" not in str(exc):
+                            raise
+                        resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
                     if resp.usage:
                         _log_usage(label, resp.usage)
                     return resp
