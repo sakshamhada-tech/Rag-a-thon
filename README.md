@@ -27,6 +27,20 @@ fusion), not just term-overlap search.
   own container/VM where the fastembed model can be downloaded once and cached.
   See [Render](#render) for exactly what the hosted demo is and what it isn't.
 
+### Scope note
+
+Fixora was built in a **12-hour hackathon window with no paid API access and no
+hardware to run a model locally** — only free-tier hosted providers
+(Groq) and CPU-only embeddings. As a direct consequence, **it cannot handle
+complex, real-world GitHub repositories as of now**: large codebases, multi-file
+bug clusters, big dependency trees and non-pytest suites are beyond what the
+fixtures here exercise and what free-tier token budgets sustain. That gap is a
+resource constraint, not a design limit — see
+[Known shortfalls](#known-shortfalls-honest-list) and
+[Future improvements](#future-improvements). The repo is **not obsolete**: it
+already does real, useful work on small Python repos with failing tests — and
+the architecture generalises once there's time, money and compute.
+
 ### Problem & solution
 
 **Problem.** Small Python codebases with failing tests burn human time on
@@ -828,6 +842,15 @@ Honest inventory of what actually works, verified by measurement (not by the mod
 
 ## Known shortfalls (honest list)
 
+- **Built for small fixtures, not complex real-world repos — yet.** The project
+  was made in a **12-hour hackathon with no paid API keys and no local GPU**;
+  everything here is sized to that: tiny demo fixtures, free-tier Groq at 8k
+  TPM, CPU-only hashed embeddings, a 50 MB clone cap, and a pytest-only pass/fail
+  signal. Fixora does not currently handle complex real GitHub repositories —
+  monorepos, compiled dependencies, deep multi-bug clusters, huge test suites —
+  and pretending otherwise would be dishonest. This is a resource constraint
+  (time, API budget, hardware), not a dead end; the path out is in
+  [Future improvements](#future-improvements).
 - **The public Render demo is degraded by construction.** fastembed cannot be
   used on the free Render instance (usage limits), so the deployment is pinned
   to the hashed bag-of-n-grams embedder: retrieval is shallow, runs are slower
@@ -911,6 +934,21 @@ Honest inventory of what actually works, verified by measurement (not by the mod
 - **Fixtures:** real-world Python repos with seeded multi-bug themes,
   flaky-test discrimination fixtures, and merge-conflict fixtures to exercise
   the retry loop harder.
+
+**Path to real GitHub repositories — and why this repo is not obsolete.**
+Nothing above requires re-architecting Fixora; it requires resources. With a
+paid or frontier model (or local GPU hardware for inference and embeddings),
+real CI, and repo budget lines raised to match (`MAX_REPO_MB`,
+`MAX_TOOL_STEPS`, `RUN_TIMEOUT`, a persistent vector index), the same
+sandbox → baseline → analyse → fix ⇄ test → review → approval pipeline covers
+complex, real-world GitHub repositories. The staged path is: (1) point the
+agent at *small, real* internal Python services and measure fix-rate; (2) add
+CI + neural retrieval on a persistent volume; (3) lift the clone/tool budgets
+once evaluation is green. Until then the tool is exactly what it says it is —
+an autonomous fixer for small Python repos with failing tests, with a human
+approving every consequential change — which is genuinely useful: pre-commit
+triage, demo-driven development, teaching agentic workflow, and internal
+tooling where the stakes are low and the reviewer is you.
 
 ## What is deliberately out of scope
 
