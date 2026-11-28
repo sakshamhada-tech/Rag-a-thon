@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import fixora.runner as runner_module
-from fixora.llm import FallbackLLMClient, LLMError, MockClient
+from fixora.llm import FallbackLLMClient, LLMError, MockClient, LLMResponse, ToolCall
 from fixora.runner import ACTIVE, RunManager
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -174,3 +174,54 @@ def test_resume_rebuilds_llm_chain_from_fresh_env(monkeypatch, tmp_path):
     assert record.status == "awaiting_approval"
     assert len(built) == 2                      # chain rebuilt at resume
     assert record.ctx.llm is built[1]           # fresh client in use
+
+
+class NeverEndingFix:
+    """Delegates to MockClient, except the fix phase requests tools forever
+    (cap_starve=True) until told to stop — simulating a model that burns its
+    tool-step budget without converging."""
+
+    provider_label = "never-ending-fix"
+    supports_reasoning = False
+
+    def __init__(self):
+        self.inner = MockClient()
+        self.cap_starve = True
+        self.calls = 0
+
+    def chat(self, messages, tools, reasoning_effort=None):
+        is_fix = any("PHASE: fix" in str(m.get("content", ""))
+                     for m in messages if m.get("role") == "system")
+        if is_fix and self.cap_starve:
+            self.calls += 1
+            return LLMResponse(text="", tool_calls=[
+                ToolCall(id=f"cap-{self.calls}", name="read_file",
+                         arguments={"path": "README.md"})])
+        return self.inner.chat(messages, tools, reasoning_effort=reasoning_effort)
+
+
+def test_resume_after_fix_tool_step_cap_keeps_completed_work(monkeypatch, tmp_path):
+    """A fix phase that exhausts its tool-step budget must stop the run in the
+    resumable 'error' state — NOT silently truncate and NOT force a restart
+    from the beginning. Resume re-runs only the fix node with a fresh budget.
+    """
+    repo = _copy_fixture(tmp_path)
+    client = NeverEndingFix()
+    monkeypatch.setattr(runner_module, "get_llm", lambda settings: client)
+    manager = RunManager()
+    record = manager.start(str(repo), "Fix the failing tests", printer=_noop_printer)
+    record = _wait_for_terminal(record)
+
+    assert record.status == "error"
+    assert record.resumable is True
+    assert client.calls >= 1
+    assert _count_events(record, "test_result") == 1   # baseline only
+
+    client.cap_starve = False                        # the model converges now
+    resumed = manager.resume(record.run_id)
+    record = _wait_for_terminal(resumed)
+
+    assert record.status == "awaiting_approval"
+    assert _count_events(record, "start") == 1       # no restart
+    assert _count_events(record, "test_result") == 3  # baseline not re-run
+    assert client.calls >= 2                          # fix actually resumed

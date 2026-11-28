@@ -11,7 +11,7 @@ import os
 import re
 
 from ..config import MAX_OUTPUT_CHARS
-from ..llm import LLMError
+from ..llm import LLMError, ToolStepCapError
 from ..reasoning import select_reasoning_effort
 from ..retrieval import retriever_for, build_failure_queries
 from ..query_assist import rewrite_queries, rerank
@@ -161,8 +161,15 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
             raise LLMError(f"{phase}: model repeatedly called unavailable tools "
                            f"({bogus_names}) — stopping the turn")
     else:
-        final_text = final_text or "[stopped: tool-step cap reached]"
-        ctx.log_step(phase, final_text)
+        # Out of tool steps: stop loudly instead of limping on with a
+        # truncated phase. The runner maps LLMError to the resumable
+        # 'error' state, so the user can Resume with a fresh budget
+        # rather than start the run over.
+        message = (f"{phase}: ran out of tool-step budget "
+                   f"({ctx.settings.max_tool_steps} steps) without converging; "
+                   "partial work is preserved")
+        ctx.log_step(phase, message, reason="tool_step_cap")
+        raise ToolStepCapError(message)
     return final_text, new_messages
 
 

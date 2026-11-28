@@ -35,6 +35,15 @@ class LLMError(Exception):
     """Raised for missing keys, API failures, or malformed responses."""
 
 
+class ToolStepCapError(LLMError):
+    """A phase consumed its tool-step budget (MAX_TOOL_STEPS) without
+    converging. Raised instead of silently truncating the phase so the run
+    stops in the resumable 'error' state with partial work preserved — the
+    user can Resume (fresh step budget, checkpoint kept) instead of starting
+    from scratch.
+    """
+
+
 _FRIENDLY_RULES = [
     (re.compile(r"(413|request too large|too many tokens|reduce your message|"
                 r"context length|context window|maximum context|token limit)", re.I),
@@ -56,6 +65,9 @@ _FRIENDLY_RULES = [
      "The provider is temporarily unavailable. Try again shortly, or configure a fallback provider."),
     (re.compile(r"(insufficient_quota|billing|payment required|402)", re.I),
      "The provider reports a billing/quota problem. Check your plan and billing settings."),
+    (re.compile(r"tool[- ]step budget", re.I),
+     "The agent ran out of tool steps before finishing. Partial work is kept — "
+     "press Resume to continue with a fresh step budget instead of starting over."),
 ]
 
 

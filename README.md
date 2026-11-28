@@ -390,6 +390,22 @@ understand the risk. **Note:** Docker was not available in the build sandbox
 used by the maintainer agent, so this image is written but not built/verified
 there — `docker build -t fixora .` is the command to run where Docker exists.
 
+### Render
+
+The Dockerfile is a working blueprint for a Render **Web Service** (Docker runtime; Render injects `PORT`). Recommended environment variables in the Render dashboard (never commit keys):
+
+- `LLM_PROVIDER=groq`, `GROQ_API_KEY=gsk-...`, `GROQ_MODEL=openai/gpt-oss-120b` (default in `.env.example`) — or your chain via `LLM_PROVIDERS=groq,openai`.
+- `FIXORA_EMBEDDER=hash` — already the image default (see Dockerfile ENV). The image pre-downloads fastembed at build time *if possible*, but the build masks that failure, so the hash default avoids a silent runtime hub probe. Set `FIXORA_EMBEDDER=auto` to re-enable fastembed once you trust the build cache.
+- `FIXORA_ALLOW_DEPENDENCY_INSTALL=0` — demos need no installs; saves a slow pip resolve on every run that a repo declares deps.
+- `MAX_TOOL_STEPS` (default 12) — raise to 16–20 if runs often stop on the tool-step budget (see below).
+
+Honest performance notes: Render's free web service spins down after ~15 minutes of inactivity and the next request pays a 30–60 s cold start; shared 0.1 vCPU makes pytest + retrieval sluggish. Every LLM call and phase is timed in the run log (`timings`), which separates provider latency from sandbox latency. Keep the tab open while runs execute (the UI streams over SSE).
+
+Two failure modes look similar but need different fixes:
+
+- **Run stops with "The agent ran out of tool steps before finishing … press Resume"** (`status=error`): the fix phase exhausted `MAX_TOOL_STEPS` without converging. Partial work is kept; press **Resume run** — only the failed node re-runs with a fresh budget, the baseline and analyse/plan are not repeated, and you are *not* sent back to the start. Resume repeatedly if needed; each resume grants one more budget.
+- **A built-in demo shows "4 passed, 0 failed" at baseline**: that cannot come from this repository — both newer demos are collection-blocked at HEAD in every invocation mode, and the fixtures carry seeded bugs. It means the deployed image is not this tree: a stale Render build cache or an image built from a working tree whose checked-in fixture had been rewritten by an approved `--repo ./demo_repo* --yes` run (guarded since `c17c654`; see "Demo repos"). Fix: check the service builds the intended branch, then redeploy with **"Clear build cache"**, and confirm the demo picker shows Skylark/Meridian with collection-blocked baselines.
+
 ### Vercel (static frontend)
 
 The repo is deployable on Vercel as a **static frontend** (`frontend/`) plus a
@@ -512,6 +528,18 @@ JSON log in `logs/`.
 - `demo_repo_import/` ("meridian") — an import of the wrong name from an internal
   module (`stock_level` vs `stock_count`) blocks collection; the fix needs two
   edits (import line, then the call site), exercising the retry loop.
+
+Fixture safety invariant: the demo *picker* runs every demo on a temporary
+copy and approvals only export a patch — the checked-in fixtures are never
+modified. The CLI `--repo ./demo_repo* --yes` path is guarded the same way
+(`approve()` refuses to write into a built-in fixture, HTTP 409, with restore
+instructions): applying a fix there would silently repair the seeded bug and
+the demo would then start with a green suite forever — the classic cause of a
+deployed instance showing "4 passed, 0 failed" at baseline. Local direct
+pytest runs of each demo: `cd demo_repo_import && python -m pytest` (or any
+`pytest` invocation; each demo has its own `pyproject.toml` with
+`pythonpath = ["."]`). Note the four demos cannot share one root-level pytest
+process — they intentionally duplicate test basenames; run them one at a time.
 
 ## Speed / latency notes
 
@@ -683,7 +711,7 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # 175 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
+python -m pytest tests/                   # 176 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
 python scripts/verify_rag.py              # one-command RAG + embeddings end-to-end check (FIXORA_EMBEDDER=auto by default)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
