@@ -70,9 +70,13 @@ def test_syntax_error_demo_reaches_approval_gate(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_PROVIDERS", "")
     source = REPO_ROOT / "demo_repo_syntax"
-    import shutil as _shutil
-    pristine = (source / "skylark" / "pricing.py").read_text(encoding="utf-8")
-    _ = _shutil  # fixtures stay pristine only because no approval is granted in tests
+    pricing = source / "skylark" / "pricing.py"
+    assert 'return f"${total:.2f}' in pricing.read_text(encoding="utf-8"), (
+        "demo_repo_syntax/skylark/pricing.py is no longer broken — the demo was most "
+        "likely run with `--yes` in the checked-out repo. Restore it with "
+        "`git restore demo_repo_syntax/` (fixtures are read-only props; use a copy "
+        "to demo with --yes).")
+    pristine = pricing.read_text(encoding="utf-8")
     record = RunManager().run_blocking(str(source), "Fix the failing tests",
                                        max_attempts=3, printer=lambda *a, **k: None)
     assert record.status == "awaiting_approval"
@@ -85,6 +89,12 @@ def test_import_error_demo_reaches_approval_gate(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_PROVIDERS", "")
     source = REPO_ROOT / "demo_repo_import"
+    catalog = source / "meridian" / "catalog.py"
+    assert "stock_level" in catalog.read_text(encoding="utf-8"), (
+        "demo_repo_import/meridian/catalog.py was modified — the demo was most likely "
+        "run with `--yes` in the checked-out repo. Restore it with "
+        "`git restore demo_repo_import/` (fixtures are read-only props; use a copy "
+        "to demo with --yes).")
     record = RunManager().run_blocking(str(source), "Fix the failing tests",
                                        max_attempts=3, printer=lambda *a, **k: None)
     assert record.status == "awaiting_approval"

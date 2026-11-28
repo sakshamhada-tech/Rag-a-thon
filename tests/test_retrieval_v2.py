@@ -62,9 +62,14 @@ def test_ast_chunks_include_functions_classes_and_tests():
 
 def test_syntax_error_file_falls_back_to_windows():
     with tempfile.TemporaryDirectory() as tmp:
-        dst = Path(tmp) / "repo"
-        shutil.copytree(REPO_ROOT / "demo_repo_syntax", dst)
-        chunks = chunk_python(dst / "skylark" / "pricing.py", "skylark/pricing.py")
+        # self-contained: an unterminated f-string is a syntax error on every
+        # supported Python (3.11 through 3.14+); do not depend on the demo fixture.
+        target = Path(tmp) / "broken.py"
+        target.write_text(
+            '"""Module docstring."""' + "\n\n\n"
+            + 'def format_total(total):\n'
+            + '    return f"${total:.2f}\n', encoding="utf-8")
+        chunks = chunk_python(target, "broken.py")
         assert chunks, "unparseable file must still be indexed via line windows"
         assert all(c["kind"] == "window" for c in chunks)
 

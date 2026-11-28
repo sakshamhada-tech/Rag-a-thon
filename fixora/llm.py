@@ -315,7 +315,7 @@ class MockClient:
             evidence = tool_text if tool_text.strip() else all_text
             if "search_code" not in tool_names:
                 return call("search_code", {
-                    "pattern": "ROUND_DOWN|ROUND_HALF_EVEN|ROUND_HALF_UP|quantity > 25|import |f\"\$|stock_",
+                    "pattern": r"ROUND_DOWN|ROUND_HALF_EVEN|ROUND_HALF_UP|quantity > 25|import |f\"\$|stock_",
                     "path": ".",
                 })
             if "read_file" not in tool_names:
