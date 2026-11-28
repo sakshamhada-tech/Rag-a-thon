@@ -16,11 +16,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-# Optional neural embeddings for RAG (hybrid retrieval works either way):
-# fastembed loads BAAI/bge-small-en-v1.5 from Hugging Face at image build time.
-# If the download or install fails, the image still ships and the app falls back
-# to the local hashed bag-of-n-grams embedder (fully offline, deterministic).
-RUN pip install --no-cache-dir fastembed==0.9.1 || true
+# fastembed ships in requirements.txt; pre-download the model at build time so
+# cold starts are fast and offline runs work from the on-disk cache.
+# If the download fails, the image still ships and the app falls back to the
+# local hashed bag-of-n-grams embedder (fully offline, deterministic).
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')" \
     || echo "fastembed model pre-download failed; runtime will use the hash embedder"
 COPY fixora ./fixora

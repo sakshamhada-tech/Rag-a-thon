@@ -56,7 +56,13 @@ class FastembedEmbedder:
 
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5"):
         from fastembed import TextEmbedding              # raises ImportError if absent
-        self._model = TextEmbedding(model_name)          # raises on model load failure
+        # If the model is already cached, load strictly from disk so offline runs
+        # never contend with the hub. When nothing is cached yet (first run), fall
+        # through to the normal path — a one-time ~30 MB download.
+        try:
+            self._model = TextEmbedding(model_name, local_files_only=True)
+        except Exception:
+            self._model = TextEmbedding(model_name)      # one-time download, may raise
         self.dims = self._model.embedding_size if hasattr(self._model, "embedding_size") else 384
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -64,16 +70,28 @@ class FastembedEmbedder:
         return vecs
 
 
+# Process-wide memo: the fastembed probe may download a ~30 MB model on first
+# use, so repeated retriever constructions must not repeat it. Keyed by the
+# requested backend so tests that flip FIXORA_EMBEDDER still see their value.
+_embedder_cache: dict[str, tuple] = {}
+
+
 def get_embedder():
-    """Returns (embedder, backend_name). Never raises."""
+    """Returns (embedder, backend_name). Never raises. Memoised per process."""
     pref = (os.environ.get("FIXORA_EMBEDDER") or "auto").strip().lower()
+    cached = _embedder_cache.get(pref)
+    if cached is not None:
+        return cached
     if pref in ("auto", "fastembed"):
         try:
-            return FastembedEmbedder(), "fastembed"
+            result = (FastembedEmbedder(), "fastembed")
+            _embedder_cache[pref] = result
+            return result
         except Exception:
-            if pref == "fastembed":
-                pass  # fall through to hash; caller logs the backend actually used
-    return HashEmbedder(), "hash"
+            pass  # fall through to hash; caller logs the backend actually used
+    result = (HashEmbedder(), "hash")
+    _embedder_cache[pref] = result
+    return result
 
 
 def probe_groq_embeddings(settings) -> dict:

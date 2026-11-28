@@ -30,7 +30,10 @@ def test_hash_embedder_is_deterministic_and_normalised():
     assert math.isclose(math.sqrt(sum(v * v for v in a)), 1.0, abs_tol=1e-6)
 
 
-def test_get_embedder_never_raises():
+def test_get_embedder_never_raises(monkeypatch):
+    # Pin the offline embedder: the auto/fastembed path fetches a model over the
+    # network on first use, which is covered manually by scripts/verify_rag.py.
+    monkeypatch.setenv("FIXORA_EMBEDDER", "hash")
     emb, backend = get_embedder()
     assert backend in ("fastembed", "hash")
     vecs = emb.embed(["hello world"])
