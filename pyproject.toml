@@ -1,0 +1,9 @@
+# Repository-wide pytest configuration for the fixora package's own suite.
+# testpaths keeps bare `pytest` scoped to the package's tests; the demo
+# fixtures under demo_repo*/ are checked-in bug fixtures, each runnable from
+# inside its own directory (see README). pythonpath makes bare `pytest`
+# behave like `python -m pytest` (which puts CWD on sys.path itself) and
+# keeps direct `pytest demo_repo_*` invocations from repo root working.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "demo_repo", "demo_repo_hard", "demo_repo_syntax", "demo_repo_import"]

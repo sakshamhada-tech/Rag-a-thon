@@ -683,7 +683,7 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # 150 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
+python -m pytest tests/                   # 175 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
 python scripts/verify_rag.py              # one-command RAG + embeddings end-to-end check (FIXORA_EMBEDDER=auto by default)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```

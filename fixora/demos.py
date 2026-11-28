@@ -40,6 +40,15 @@ DEMOS = [
 _SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules"}
 
 
+def demo_fixture_paths() -> list[Path]:
+    """Absolute, resolved paths of the checked-in demo fixture directories.
+
+    Applying an agent's diff into these rewrites the seeded bugs and makes the
+    demos start green forever — used by the approve-time guard.
+    """
+    return [(PROJECT_ROOT / demo["id"]).resolve() for demo in DEMOS]
+
+
 def list_demos() -> list[dict]:
     return [dict(demo) for demo in DEMOS if (PROJECT_ROOT / demo["id"]).is_dir()]
 

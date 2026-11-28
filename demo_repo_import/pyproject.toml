@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Make `import <pkg>` work regardless of how pytest is invoked (bare `pytest`,
+# `python -m pytest`, IDEs) — previously imports only resolved when pytest was
+# launched as `python -m pytest` from the repo root.
+pythonpath = ["."]
