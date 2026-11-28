@@ -198,9 +198,13 @@ multiple frontier models) alongside human direction by the repository owner.
 
 ## Team
 
-- **Saksham Hada** ([@sakshamhada-tech](https://github.com/sakshamhada-tech)) — project owner, direction & review.
-- **Arena.ai Agent** — AI pair-programmer used to build/maintain the codebase
-  (see `git log`).
+| USN        | Name               | Role   |
+|------------|--------------------|--------|
+| 2392608086 | Shriyam Gupta      | Leader |
+| 2392608017 | Saksham Hada       | Member |
+| 2392608082 | Ansh Raj           | Member |
+| 2392608180 | R Pranavv          | Member |
+| 2392608080 | Simran Sagar Sethi | Member |
 
 ## Setup
 
