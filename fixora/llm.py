@@ -188,6 +188,14 @@ def _supports_reasoning(model: str, base_url: str | None) -> bool:
     return any(m in (model or "").lower() for m in markers)
 
 
+def _supports_temperature(model: str) -> bool:
+    """Strict reasoning models (o-series, gpt-5) reject any temperature other
+    than the default — omit it there. Everywhere else pin temperature=0 so tool
+    calls stay schema-faithful instead of sampling at temperature=1."""
+    m = (model or "").lower()
+    return not any(x in m for x in ("o1", "o3", "o4", "gpt-5"))
+
+
 # ---------------------------------------------------------------- Anthropic
 
 class AnthropicClient:
@@ -227,7 +235,8 @@ class AnthropicClient:
                      "content": m["content"]}]})
         anthropic_tools = [{"name": t["name"], "description": t["description"],
                             "input_schema": t["parameters"]} for t in tools]
-        kwargs = dict(model=self.model, max_tokens=max_tokens or 4096, messages=convo)
+        kwargs = dict(model=self.model, max_tokens=max_tokens or 4096, messages=convo,
+                      temperature=0)
         if system:
             kwargs["system"] = system
         if anthropic_tools:
@@ -282,6 +291,11 @@ class OpenAIClient:
         kwargs: dict = dict(model=self.model, messages=oai, max_tokens=max_tokens or 4096)
         if oai_tools:
             kwargs["tools"] = oai_tools
+            # Sequential calls only: parallel calls multiply the odds of one
+            # malformed element taking down the whole request with a 400.
+            kwargs["parallel_tool_calls"] = False
+        if _supports_temperature(self.model):
+            kwargs["temperature"] = 0
         if reasoning_effort and self.supports_reasoning:
             kwargs["reasoning_effort"] = reasoning_effort
         try:

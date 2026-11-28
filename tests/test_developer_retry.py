@@ -168,3 +168,85 @@ def test_mixed_turn_executes_valid_calls_and_rejects_bogus(ctx):
     by_id = {m.get("tool_call_id"): m for m in messages if m["role"] == "tool"}
     assert '"error"' not in by_id["c1"]["content"]       # real tool executed
     assert "not an available tool" in by_id["c2"]["content"]  # pseudo-tool answered with error
+
+
+def test_schema_mismatch_correction_names_required_params(tmp_path):
+    """The exact production failure: provider 400 'parameters for tool
+    apply_patch did not match schema: errors: [missing properties ...]'.
+
+    The retry message must name the tool's REQUIRED properties so the model
+    can resend a valid call — the generic 'only these tools exist' message
+    does not help here."""
+    repo = tmp_path / "demo_schema"
+    repo.mkdir()
+    (repo / "README.md").write_text("# demo\n")
+    sb = Sandbox(repo)
+
+    class FlakyLLM:
+        def __init__(self):
+            self.calls = 0
+            self.messages = []
+
+        def chat(self, messages, tools, reasoning_effort=None):
+            self.calls += 1
+            self.messages = messages
+            if self.calls == 1:
+                raise LLMError("Error code: 400 - Tool call validation failed: "
+                               "tool call validation failed: parameters for tool "
+                               "apply_patch did not match schema: errors: "
+                               "[missing properties: 'path', 'old_str', 'new_str']")
+            return LLMResponse(text="ok", tool_calls=[])
+
+    fake = FlakyLLM()
+    try:
+        run_ctx = RunContext(sandbox=sb, settings=_settings(), llm=fake,
+                             tools=build_tools(sb, _settings()),
+                             printer=lambda *a, **k: None)
+        text, _ = run_developer(run_ctx, "fix", {"task": "fix it"}, "fix")
+        assert text == "ok"
+        assert fake.calls == 2
+        corrective = [m for m in fake.messages
+                      if m["role"] == "user" and "REQUIRES exactly these JSON properties" in m["content"]]
+        assert corrective, "expected a schema-aware corrective message"
+        body = corrective[0]["content"]
+        assert "path" in body and "old_str" in body and "new_str" in body
+        assert "apply_patch" in body
+    finally:
+        sb.cleanup()
+
+
+def test_wrong_phase_tool_gets_phase_correction(tmp_path):
+    """Tool exists but is not allowed in this phase — the correction must say
+    so, not dump the tool's argument schema (which the model didn't misuse)."""
+    repo = tmp_path / "demo_phase"
+    repo.mkdir()
+    (repo / "README.md").write_text("# demo\n")
+    sb = Sandbox(repo)
+
+    class WrongPhaseLLM:
+        def __init__(self):
+            self.calls = 0
+            self.messages = []
+
+        def chat(self, messages, tools, reasoning_effort=None):
+            self.calls += 1
+            self.messages = messages
+            if self.calls == 1:
+                raise LLMError("Error code: 400 - Tool call validation failed: "
+                               "attempted to call tool 'apply_patch' which was not in request.tools")
+            return LLMResponse(text="ok", tool_calls=[])
+
+    fake = WrongPhaseLLM()
+    try:
+        run_ctx = RunContext(sandbox=sb, settings=_settings(), llm=fake,
+                             tools=build_tools(sb, _settings()),
+                             printer=lambda *a, **k: None)
+        text, _ = run_developer(run_ctx, "analyse", {"task": "find bug"}, "explore")
+        assert text == "ok"
+        assert fake.calls == 2
+        corrective = [m for m in fake.messages
+                      if m["role"] == "user" and "does not exist in this phase" in m["content"]]
+        assert corrective, "expected a phase-aware corrective message"
+        assert "apply_patch" in corrective[0]["content"]
+    finally:
+        sb.cleanup()

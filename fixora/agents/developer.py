@@ -46,7 +46,9 @@ _PHASE_DETAILS = {
             "read_file for full context; never re-read files already in context. "
             "Fix the bug using write_file / apply_patch. Prefer small, exact "
             "patches with unique anchors. Do NOT touch the tests. Re-read files after editing "
-            "if unsure. If the failure diagnosis is dependency_missing and the repo declares "
+            "if unsure. When editing with apply_patch, pass ALL THREE of path, old_str, new_str — "
+            "omitting any of them makes the provider reject the call. "
+            "If the failure diagnosis is dependency_missing and the repo declares "
             "the missing package, call install_dependencies FIRST, then re-check the tests. "
             "install_dependencies installs only the repo's own declared dependencies and cannot "
             "take package names; it is safe to call when unsure.",
@@ -103,13 +105,7 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
                     reasoning_effort=reasoning_effort))
             elif _is_unavailable_tool_error(e) and validation_retries < 2:
                 validation_retries += 1
-                correction = (
-                    f"The provider rejected a tool call: {e}\n"
-                    f"Only these tools exist in this phase: {allowed_list}. "
-                    "Do not call any other tool — 'json', 'commentary', 'output_final' "
-                    "and similar pseudo-tools are not tools. If you meant to emit JSON, "
-                    "write the JSON object as your reply text. "
-                    "If you meant to edit code, describe the edit instead of calling it now.")
+                correction = _tool_error_correction(e, ctx, allowed_list)
                 ctx.printer(f"[ERROR] {phase} tool-call rejected; retrying with correction "
                             f"({validation_retries}/2)")
                 ctx.log_step(phase, "unavailable tool call rejected by provider", reason="tool_rejected")
@@ -241,6 +237,52 @@ def _compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
 def _is_unavailable_tool_error(error: Exception) -> bool:
     text = str(error).lower()
     return bool(re.search(r"(not in request\.tools|tool call validation failed|attempted to call tool|unknown tool)", text))
+
+
+_TOOL_NAME_IN_ERROR = re.compile(
+    r"(?:for tool|to call tool|unknown tool:?)\s*['\"]?([A-Za-z_][\w-]*)", re.I)
+
+
+def _tool_error_correction(error: Exception, ctx, allowed_list: str) -> str:
+    """Correction prompt for a provider-rejected tool call.
+
+    Generic 'only these tools exist' is useless when the call WAS an allowed
+    tool with bad arguments — name the tool, repeat ITS required properties,
+    and show a skeleton call. When the tool exists but is not allowed in this
+    phase, say exactly that instead."""
+    text = str(error)
+    match = _TOOL_NAME_IN_ERROR.search(text)
+    tool_name = match.group(1) if match else None
+    tool = ctx.tools.get(tool_name) if tool_name else None
+    allowed_names = {t.strip() for t in allowed_list.split(",") if t.strip()}
+
+    if tool is not None and tool.name not in allowed_names:
+        return (f"The tool '{tool.name}' does not exist in this phase — do not call it. "
+                f"Only these tools exist in this phase: {allowed_list}. "
+                "If you meant to edit code, describe the edit instead; it will be "
+                "applied in the fix phase.")
+    if tool is not None and tool.parameters.get("required"):
+        required = tool.parameters["required"]
+        skeleton = json.dumps({k: f"<{k}>" for k in required})
+        props = tool.parameters.get("properties", {})
+        hints = "; ".join(f"{k}: {props.get(k, {}).get('description', 'required')}"
+                          for k in required)
+        return (f"The provider rejected your call to the tool '{tool.name}' — it did "
+                f"not match the tool's schema.\n"
+                f"Provider detail: {_clip(text, 300)}\n"
+                f"This tool REQUIRES exactly these JSON properties on EVERY call: "
+                f"{', '.join(required)}.\n"
+                f"Property meanings — {hints}.\n"
+                f"Example: {tool.name}({skeleton})\n"
+                "Resend the call with ALL required properties present and correctly "
+                "spelled — never omit them. "
+                f"Only these tools exist in this phase: {allowed_list}.")
+    return (f"The provider rejected a tool call: {text}\n"
+            f"Only these tools exist in this phase: {allowed_list}. "
+            "Do not call any other tool — 'json', 'commentary', 'output_final' "
+            "and similar pseudo-tools are not tools. If you meant to emit JSON, "
+            "write the JSON object as your reply text. "
+            "If you meant to edit code, describe the edit instead of calling it now.")
 
 
 def _clip(text: str, limit: int = 900) -> str:
