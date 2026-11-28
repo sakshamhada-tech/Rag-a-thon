@@ -29,6 +29,16 @@ retrieval runs in-memory with no database — but the RAG layer is genuinely
 hybrid (AST-aware chunks, BM25 **and** local vector similarity, reciprocal rank
 fusion), not just term-overlap search.
 
+## Team
+
+| USN        | Name               | Role   |
+|------------|--------------------|--------|
+| 2392608086 | Shriyam Gupta      | Leader |
+| 2392608017 | Saksham Hada       | Member |
+| 2392608082 | Ansh Raj           | Member |
+| 2392608180 | R Pranavv          | Member |
+| 2392608080 | Simran Sagar Sethi | Member |
+
 ## Contents
 
 **Start here** — [Live deployment](#live-deployment) · [Scope note](#scope-note) · [Problem & solution](#problem--solution) · [How it works](#how-it-works)
@@ -223,16 +233,6 @@ Python 3.11, curl. **AI coding tools used to build this project** — **Arena.ai
 Agent Mode** (an agentic coding harness; contributions recorded as `Arena
 Agent <arena-agent@users.noreply.github.com>` in git history, built on
 multiple frontier models) alongside human direction by the repository owner.
-
-## Team
-
-| USN        | Name               | Role   |
-|------------|--------------------|--------|
-| 2392608086 | Shriyam Gupta      | Leader |
-| 2392608017 | Saksham Hada       | Member |
-| 2392608082 | Ansh Raj           | Member |
-| 2392608180 | R Pranavv          | Member |
-| 2392608080 | Simran Sagar Sethi | Member |
 
 ## Setup
 
