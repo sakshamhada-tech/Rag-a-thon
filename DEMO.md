@@ -43,6 +43,10 @@ For real autonomous behaviour, set `LLM_PROVIDER=groq` with `GROQ_API_KEY`.
 
 Fixture copies are mandatory: without `--yes` nothing is modified anywhere;
 with `--yes`, use a copy (`cp -r`) — the checked-in demos are read-only props.
+If you ever ran the offline demo with `--yes` inside the repo itself, the
+fixtures are now fixed in your working tree; restore them with
+`git restore demo_repo_syntax/ demo_repo_import/` (the test suite no longer
+depends on it, but the demos only make sense while they ship broken).
 
 ## Verification commands
 
