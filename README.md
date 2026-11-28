@@ -29,6 +29,18 @@ retrieval runs in-memory with no database — but the RAG layer is genuinely
 hybrid (AST-aware chunks, BM25 **and** local vector similarity, reciprocal rank
 fusion), not just term-overlap search.
 
+## Contents
+
+**Start here** — [Live deployment](#live-deployment) · [Scope note](#scope-note) · [Problem & solution](#problem--solution) · [How it works](#how-it-works)
+
+**Using Fixora** — [Setup](#setup) · [CLI](#cli) · [Web UI](#web-ui) · [Demo repos](#demo-repos) · [Verify](#verify)
+
+**Configuration & deployment** — [Use Groq Cloud (free tier)](#use-groq-cloud-free-tier) · [Prompt size and free-tier token limits (why a 413 can happen)](#prompt-size-and-free-tier-token-limits-why-a-413-can-happen) · [LLM fallback chain](#llm-fallback-chain) · [Use Grok (xAI)](#use-grok-xai) · [Docker](#docker) · [Render](#render) · [Vercel (static frontend)](#vercel-static-frontend) · [Security](#security) · [FastAPI server](#fastapi-server)
+
+**How it works under the hood** — [Multi-agent setup](#multi-agent-setup) · [Tech stack (every model, API, framework, dataset and tool)](#tech-stack-every-model-api-framework-dataset-and-tool) · [RAG (retrieval-augmented generation)](#rag-retrieval-augmented-generation) · [Cross-run memory](#cross-run-memory) · [Failure taxonomy and dependency errors](#failure-taxonomy-and-dependency-errors) · [Speed / latency notes](#speed--latency-notes)
+
+**About the project** — [Strengths](#strengths) · [Known shortfalls (honest list)](#known-shortfalls-honest-list) · [Future improvements](#future-improvements) · [Repository layout](#repository-layout) · [What is deliberately out of scope](#what-is-deliberately-out-of-scope) · [Team](#team)
+
 ### Live deployment
 
 **Live demo: https://rag-a-thon.onrender.com/** (Render, free tier).
