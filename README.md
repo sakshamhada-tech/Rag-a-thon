@@ -226,6 +226,34 @@ Free-tier notes: requests are rate-limited per minute; sustained 429s will
 switch to the next provider in `LLM_PROVIDERS` (if set) or abort the run with an
 error. `.env` is gitignored; never commit your key.
 
+### Prompt size and free-tier token limits (why a 413 can happen)
+
+Groq's on-demand tier serves `openai/gpt-oss-120b` with an **8,000 tokens-per-minute**
+limit; a single request whose prompt exceeds it is rejected outright with
+`Error code: 413 — Request too large`. Fixora keeps prompts well under that:
+
+- every call in the fix loop is compacted per request — the system prompt, the
+  opening instruction and a contiguous tail of the conversation are kept, the
+  elided middle is replaced with a note (`FIXORA_CONTEXT_BUDGET_CHARS`, default
+  ~18,000 chars ≈ 4.5k tokens),
+- if the model still rejects the request as too large, one transparent retry
+  runs with half the budget,
+- tool results are truncated, RAG chunks are clipped to 600 chars and the
+  already-read file replay is elided to `FIXORA_READ_BLOCK_CHARS` (default
+  8,000 chars, oldest files first),
+- a 413 is also treated as retryable for the `LLM_PROVIDERS` fallback chain, so
+  a bigger-context provider can take over the run.
+
+Why it can appear "out of nowhere": the 8k TPM limit was always there, but free/
+on-demand allocations have been shrinking (llama-3.3-70b-versatile was retired
+for free/dev tiers on 2026-08-16) and prompts grow with retrieval context —
+RAG injection, memory hints and the already-read replay all count toward the
+same 8k. If you see 413s persistently, prefer a smaller task, lower
+`MAX_TOOL_STEPS`, or add a fallback provider rather than re-running blindly.
+Provider error internals (org IDs, limits, request metadata) are **not** shown
+in the dashboard — users see a friendly one-liner; the raw detail stays in the
+on-disk run log.
+
 ### LLM fallback chain
 
 Set `LLM_PROVIDERS` in `.env` to try providers in order on

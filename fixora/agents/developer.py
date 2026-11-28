@@ -7,6 +7,7 @@ cap is hit; every call goes through the sandboxed tool registry and is logged.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from ..config import MAX_OUTPUT_CHARS
@@ -81,10 +82,23 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
     validation_retries = 0
     for _ in range(ctx.settings.max_tool_steps):
         try:
-            resp, llm_ms = ctx.timed_llm(lambda: ctx.llm.chat(new_messages, schemas,
-                                                        reasoning_effort=reasoning_effort))
+            budget = _context_budget()
+            resp, llm_ms = ctx.timed_llm(lambda: ctx.llm.chat(
+                _compact_messages(new_messages, budget), schemas,
+                reasoning_effort=reasoning_effort))
         except LLMError as e:
-            if _is_unavailable_tool_error(e) and validation_retries < 2:
+            if _is_context_error(e):
+                # Token-limited tiers (e.g. Groq on_demand, 8k TPM) can reject a
+                # legitimate-but-large prompt. One transparent retry with half the
+                # budget; if it still fails, the error propagates to the runner,
+                # which surfaces a friendly message.
+                ctx.printer(f"[ERROR] {phase}: request too large for the model; "
+                            "compacting context and retrying once")
+                ctx.log_step(phase, "request too large for model; compacted context and retrying once")
+                resp, llm_ms = ctx.timed_llm(lambda: ctx.llm.chat(
+                    _compact_messages(new_messages, _context_budget() // 2), schemas,
+                    reasoning_effort=reasoning_effort))
+            elif _is_unavailable_tool_error(e) and validation_retries < 2:
                 validation_retries += 1
                 correction = (
                     f"The provider rejected a tool call: {e}\n"
@@ -98,10 +112,11 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
                 ctx.log_step(phase, "unavailable tool call rejected by provider", error=str(e))
                 new_messages.append({"role": "user", "content": correction})
                 continue
-            # Fatal for this run (bad key/model/base URL/tool schema): stop.
-            ctx.printer(f"[ERROR] {phase} failed: {e}")
-            ctx.log_step(phase, f"llm error: {e}")
-            raise
+            else:
+                # Fatal for this run (bad key/model/base URL/tool schema): stop.
+                ctx.printer(f"[ERROR] {phase} failed: {e}")
+                ctx.log_step(phase, f"llm error: {e}")
+                raise
         assistant_msg = {"role": "assistant", "content": resp.text}
         if resp.tool_calls:
             assistant_msg["tool_calls"] = [
@@ -121,6 +136,71 @@ def run_developer(ctx, phase: str, state: dict, instruction: str,
         final_text = final_text or "[stopped: tool-step cap reached]"
         ctx.log_step(phase, final_text)
     return final_text, new_messages
+
+
+_CONTEXT_ERR = re.compile(
+    r"(413|request too large|too many tokens|reduce your message|"
+    r"context length|context window|maximum context)", re.I)
+
+# Groq's on_demand tier serves openai/gpt-oss-120b with an 8,000 TPM limit, so
+# a legitimate but large fix prompt (RAG block + already-read replay + tool
+# loop history) can be rejected outright. Keep every call comfortably below
+# that by compacting per call; the full history is still preserved for the
+# final state/logs — compaction happens only on the wire.
+def _context_budget() -> int:
+    raw = (os.environ.get("FIXORA_CONTEXT_BUDGET_CHARS") or "18000").strip()
+    try:
+        return max(4000, int(raw))
+    except ValueError:
+        return 18000
+
+
+def _is_context_error(error: Exception) -> bool:
+    """True for 'request too large for the model' style rejections."""
+    return bool(_CONTEXT_ERR.search(str(error)))
+
+
+def _message_chars(m: dict) -> int:
+    n = len(str(m.get("content") or ""))
+    for tc in m.get("tool_calls", []) or []:
+        try:
+            n += len(json.dumps(tc, default=str))
+        except TypeError:
+            n += len(str(tc))
+    return n + 16
+
+
+_ELISION_NOTE = ("[Earlier steps were elided to fit the model's context window. "
+                 "Re-read a file if you need its contents again.]")
+
+
+def _compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
+    """Fit `messages` into budget_chars by dropping the middle of the conversation.
+
+    Always keeps the system prompt and the opening instruction, plus a
+    contiguous tail of the loop. An orphaned `tool` message is never left at
+    the cut boundary (the OpenAI API rejects a tool message without its
+    assistant call). The input list is not mutated.
+    """
+    total = sum(_message_chars(m) for m in messages)
+    if total <= budget_chars or len(messages) <= 2:
+        return list(messages)
+    head, rest = messages[:2], messages[2:]
+    remaining = max(0, budget_chars - sum(_message_chars(m) for m in head)
+                    - len(_ELISION_NOTE) - 32)
+    acc, start = 0, len(rest)
+    for i in range(len(rest) - 1, -1, -1):
+        cost = _message_chars(rest[i])
+        if acc + cost > remaining:
+            break
+        acc += cost
+        start = i
+    suffix = rest[start:]
+    while suffix and suffix[0].get("role") == "tool":
+        suffix = suffix[1:]
+    if len(suffix) == len(rest):
+        return list(messages)
+    return head + [{"role": "user", "content": _ELISION_NOTE}] + suffix
 
 
 def _is_unavailable_tool_error(error: Exception) -> bool:
@@ -187,7 +267,7 @@ def _rag_block(ctx, state: dict, k: int = 5) -> str:
     for c in chunks:
         tag = f"{c['path']}:{c['start_line']}-{c['end_line']}"
         symbol = c.get("symbol") or ""
-        blocks.append(f"--- {tag} :: {c.get('kind', '')} {symbol} (score {c['score']}) ---\n{_clip(c['text'], 900)}")
+        blocks.append(f"--- {tag} :: {c.get('kind', '')} {symbol} (score {c['score']}) ---\n{_clip(c['text'], 600)}")
     return ("\n\nRelevant code retrieved from the repo (use as pointers; verify with "
             "read_file before editing):\n" + "\n\n".join(blocks))
 
@@ -216,7 +296,7 @@ def _test_context(state: dict) -> str:
     if not r:
         return ""
     failing = ", ".join(r.get("failing_tests", [])) or "none"
-    tail = r.get("output_tail", "")[-2500:]
+    tail = r.get("output_tail", "")[-1600:]
     return (f"\n\nLast test run: {r.get('passed', 0)} passed, {r.get('failed', 0)} failed, "
             f"{r.get('errors', 0)} errors. Failing: {failing}{_diagnosis_block(state)}\n"
             f"Traceback tail:\n{tail}")

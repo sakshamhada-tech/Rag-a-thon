@@ -23,7 +23,7 @@ from pathlib import Path
 from .config import Settings, load_settings
 from .events import EventEmitter
 from .github import RepoInputError, is_github_url, clone_public_repo
-from .llm import LLMError, FallbackLLMClient, get_llm
+from .llm import LLMError, FallbackLLMClient, get_llm, friendly_llm_error
 from . import memory
 from .sandbox import Sandbox, SandboxError, _snapshot
 from .tools import build_tools
@@ -206,10 +206,12 @@ class RunManager:
             record.status, record.error = "error", str(e)
             record.report = {"status": "error", "error": str(e)}
         except LLMError as e:
-            record.status, record.error = "error", str(e)
-            record.report = {"status": "error", "error": str(e)}
+            friendly = friendly_llm_error(e)
+            record.status, record.error = "error", friendly
+            record.report = {"status": "error", "error": friendly}
         except Exception as e:  # never lose the log
-            record.status, record.error = "error", f"{type(e).__name__}: {e}"
+            record.status, record.error = "error", (
+                f"{type(e).__name__}: the run failed unexpectedly. The run log has the technical details.")
             record.report = {"status": "error", "error": record.error}
         finally:
             record.finished = time.time()

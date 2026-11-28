@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -11,7 +12,17 @@ from ..events import EventEmitter
 from ..security import redact_text, redact_value
 
 _MUTATING_TOOLS = {"write_file", "apply_patch"}
-_READ_CACHE_MAX = 24000  # chars of already-read file contents to replay into prompts
+_READ_CACHE_MAX = 24000  # chars of already-read file contents cached in-process
+
+
+def _read_block_budget() -> int:
+    # already-read file contents are replayed into every fix/analyse prompt;
+    # cap what we replay so token-limited tiers (Groq 8k TPM) don't 413.
+    raw = (os.environ.get("FIXORA_READ_BLOCK_CHARS") or "8000").strip()
+    try:
+        return max(2000, int(raw))
+    except ValueError:
+        return 8000
 
 
 @dataclass
@@ -115,8 +126,22 @@ class RunContext:
     def already_read_block(self) -> str:
         if not self.read_files:
             return ""
+        budget = _read_block_budget()
         parts = [f"--- {p} ---\n{c}" for p, c in self.read_files.items()]
-        return "\n\nFiles already read (do NOT re-read them):\n" + "\n\n".join(parts)
+        total = sum(len(p) for p in parts)
+        dropped = 0
+        while len(parts) > 1 and total > budget:
+            total -= len(parts[0])
+            parts.pop(0)   # dicts are insertion-ordered: drop the oldest read first
+            dropped += 1
+        block = "\n\n".join(parts)
+        if len(block) > budget:   # a single oversized file dominates the budget
+            block = block[-budget:]
+            dropped += 1
+        note = "Files already read (do NOT re-read them):\n"
+        if dropped:
+            note = f"[{dropped} older file(s) elided to fit the model's context window]\n" + note
+        return "\n\n" + note + block
 
     def timings(self) -> dict:
         return {"total_s": round(time.time() - self.started_at, 2), **self.stats}

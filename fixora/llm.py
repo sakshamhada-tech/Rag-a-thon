@@ -32,6 +32,45 @@ class LLMError(Exception):
     """Raised for missing keys, API failures, or malformed responses."""
 
 
+_FRIENDLY_RULES = [
+    (re.compile(r"(413|request too large|too many tokens|reduce your message|"
+                r"context length|context window|maximum context|token limit)", re.I),
+     "The model rejected the request for exceeding its size/rate limit (TPM). "
+     "Fixora compacted the context and retried; if the run stopped here, the "
+     "provider's token limit is too small — pick a larger model or add a fallback "
+     "provider via LLM_PROVIDERS."),
+    (re.compile(r"(429|rate limit|too many requests|cooldown|quota)", re.I),
+     "The provider's rate limit was reached. Wait a minute and retry, or configure "
+     "an additional provider via LLM_PROVIDERS (fallback chain)."),
+    (re.compile(r"(401|403|unauthorized|invalid api key|authentication|permission denied)", re.I),
+     "The provider rejected the API key. Check the key in your .env configuration."),
+    (re.compile(r"(404|model.*(not found|decommissioned|retired|deprecated)|does not exist)", re.I),
+     "The configured model was not found or was retired. Check GROQ_MODEL (see GET /openai/v1/models)."),
+    (re.compile(r"(timeout|timed out|connection|unreachable|econnreset|socket hang up)", re.I),
+     "The provider could not be reached (network timeout or connection error). "
+     "Check your connection and the provider's status page."),
+    (re.compile(r"(500|502|503|504|overloaded|temporarily unavailable|server error)", re.I),
+     "The provider is temporarily unavailable. Try again shortly, or configure a fallback provider."),
+    (re.compile(r"(insufficient_quota|billing|payment required|402)", re.I),
+     "The provider reports a billing/quota problem. Check your plan and billing settings."),
+]
+
+
+def friendly_llm_error(error: Exception | str) -> str:
+    """Map a provider/transport failure to a dashboard-safe one-liner.
+
+    The technical detail is never dropped: nodes log the raw exception into the
+    run's step log before it reaches here. This string is what end users and
+    the browser UI see — no org IDs, request metadata or provider internals.
+    """
+    text = str(error)
+    for pattern, message in _FRIENDLY_RULES:
+        if pattern.search(text):
+            return message
+    return ("The model could not complete this request. The run log has the "
+            "technical details.")
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -375,7 +414,10 @@ def _is_retryable(error: Exception) -> bool:
     text = str(error).lower()
     markers = ("429", "rate limit", "timeout", "timed out", "500", "502", "503", "504",
                "overloaded", "connection error", "connection reset", "unreachable",
-               "temporarily unavailable", "econnreset", "socket hang up")
+               "temporarily unavailable", "econnreset", "socket hang up",
+               # a hard size rejection can succeed on a bigger-context provider
+               "413", "request too large", "too many tokens", "context length",
+               "reduce your message")
     return any(m in text for m in markers)
 
 
