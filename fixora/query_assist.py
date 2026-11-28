@@ -21,6 +21,7 @@ import re
 from .llm import LLMError
 
 _MAX_TOKENS = 120
+_RERANK_TOKENS = 200
 _SNIPPET_CAP = 300
 _ID_RE = re.compile(r"\bc(\d+)\b")
 
@@ -35,6 +36,19 @@ def _memo(ctx):
         memo = {}
         ctx._qa_memo = memo
     return memo
+
+
+def _chat_compat(ctx, messages, max_tokens: int):
+    """LLM call with a tight completion budget. Falls back to a plain call for
+    duck-typed clients that do not accept max_tokens (e.g. test fakes)."""
+    def _call():
+        try:
+            return ctx.llm.chat(messages, [], reasoning_effort="low", max_tokens=max_tokens)
+        except TypeError as exc:
+            if "max_tokens" not in str(exc):
+                raise
+            return ctx.llm.chat(messages, [], reasoning_effort="low")
+    return ctx.timed_llm(_call)
 
 
 def _memo_key(payload: str) -> str:
@@ -62,10 +76,9 @@ def rewrite_queries(ctx, state: dict) -> list[str]:
     if key in memo:
         return memo[key]
     try:
-        resp, ms = ctx.timed_llm(lambda: ctx.llm.chat(
-            [{"role": "system", "content": "You emit terse search queries only."},
-             {"role": "user", "content": prompt}],
-            [], reasoning_effort="low"))
+        resp, ms = _chat_compat(ctx, [
+            {"role": "system", "content": "You emit terse search queries only."},
+            {"role": "user", "content": prompt}], _MAX_TOKENS)
     except LLMError as e:
         ctx.log_step("rag", "query_rewrite unavailable; using local queries", error=str(e)[:200])
         memo[key] = []
@@ -117,10 +130,9 @@ def rerank(ctx, state: dict, candidates: list[dict], k: int = 5) -> tuple[list[d
         ids = memo[key]
     else:
         try:
-            resp, ms = ctx.timed_llm(lambda: ctx.llm.chat(
-                [{"role": "system", "content": "You rank code chunks and answer with JSON only."},
-                 {"role": "user", "content": prompt}],
-                [], reasoning_effort="low"))
+            resp, ms = _chat_compat(ctx, [
+                {"role": "system", "content": "You rank code chunks and answer with JSON only."},
+                {"role": "user", "content": prompt}], _RERANK_TOKENS)
             raw = resp.text.strip()
             start, end = raw.find("{"), raw.rfind("}")
             data = json.loads(raw[start:end + 1]) if start != -1 else {}

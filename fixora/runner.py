@@ -26,6 +26,7 @@ from .github import RepoInputError, is_github_url, clone_public_repo
 from .llm import LLMError, FallbackLLMClient, get_llm, friendly_llm_error
 from . import memory
 from .sandbox import Sandbox, SandboxError, _snapshot
+from .demos import demo_fixture_paths
 from .tools import build_tools
 from .agents.common import RunContext
 from .agents.graph import build_graph, initial_state
@@ -348,6 +349,17 @@ class RunManager:
                        "message": message}
         else:
             assert record.sandbox is not None and record.source_path is not None
+            source = Path(record.source_path).resolve()
+            fixtures = demo_fixture_paths()
+            if any(source == fixture or fixture in source.parents for fixture in fixtures):
+                # Never rewrite the checked-in fixtures: it removes the seeded
+                # bugs and the demos then start with a green suite forever.
+                raise RunConflictError(
+                    "Refusing to apply the fix into a built-in demo fixture "
+                    f"({source}). Demos run on a temporary copy — use the demo "
+                    "picker (Run setup → Built-in demo) or point --repo at your own copy. "
+                    "If a fixture was already rewritten, restore it with: "
+                    "git checkout -- demo_repo demo_repo_hard demo_repo_syntax demo_repo_import")
             self._apply_workspace_to_original(record.sandbox.workspace, record.source_path)
             applied = {"applied_to": str(record.source_path)}
         record.status = "applied"

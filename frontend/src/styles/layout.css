@@ -42,7 +42,7 @@ html.resizing-panels, html.resizing-panels * { cursor: col-resize !important; us
 .run-item[aria-current="true"] { background: var(--surface-2); border-color: var(--border-strong); }
 .run-item-name { min-width: 0; font-weight: 600; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-item-meta { grid-column: 1 / -1; display: flex; gap: var(--space-2); flex-wrap: wrap; min-width: 0; color: var(--text-muted); font-size: var(--text-xs); font-family: var(--font-mono); overflow-wrap: anywhere; }
-.source-option { display: flex; gap: var(--space-2); align-items: center; min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--text); }
+.source-option { display: flex; gap: var(--space-2); align-items: center; min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--text); max-width: 340px; }
 .source-option input { accent-color: var(--accent); }
 
 .center-panel { position: relative; flex: 1 1 auto; min-width: 260px; }
@@ -206,6 +206,7 @@ html.resizing-panels, html.resizing-panels * { cursor: col-resize !important; us
 
 .button { box-shadow: inset 0 1px 0 var(--panel-highlight); transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast); }
 .left-panel .button { max-width: 340px; }
+.left-panel .source-option, .left-panel .run-setup button { max-width: 340px; }
 .approval-actions .button { max-width: 280px; }
 .button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-raised), inset 0 1px 0 var(--panel-highlight); }
 .button:active:not(:disabled) { transform: translateY(0); }

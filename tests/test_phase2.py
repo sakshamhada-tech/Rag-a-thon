@@ -11,7 +11,7 @@ import pytest
 from fixora.config import Settings
 from fixora.github import RepoInputError, validate_github_url
 from fixora.llm import FallbackLLMClient, LLMError, LLMResponse
-from fixora.runner import RunManager
+from fixora.runner import RunManager, RunConflictError, RunRecord
 from fixora.sandbox import Sandbox
 from fixora.tools import build_tools
 from fixora.agents.common import RunContext
@@ -202,6 +202,26 @@ def test_approve_applies_only_after_approval(monkeypatch, local_hard_copy):
     assert result["status"] == "applied"
     assert "ROUND_HALF_UP" in (local_hard_copy / "ledgerline" / "money.py").read_text()
     assert "if quantity >= 25" in (local_hard_copy / "ledgerline" / "discounts.py").read_text()
+
+
+def test_approve_refuses_to_overwrite_builtin_demo_fixture():
+    """A local --yes run pointed at a checked-in demo fixture must never be
+    applied: rewriting the fixture repairs the seeded bug and the demo then
+    starts with a green suite forever."""
+    manager = RunManager()
+    fixture = DEMO_HARD.resolve()
+    record = RunRecord(run_id="fixtureguarded1", repo_input=str(fixture),
+                       task="Fix the failing tests", is_github=False,
+                       max_attempts=1, status="awaiting_approval",
+                       source_path=fixture, sandbox=object(),  # truthy: guard fires before any file access
+                       report={"diff": "--- a/x\n+++ b/x\n"})
+    manager._runs[record.run_id] = record
+    manager._active = record.run_id
+    with pytest.raises(RunConflictError, match="demo fixture"):
+        manager.approve(record.run_id)
+    # the fixture keeps its seeded bugs
+    assert "ROUND_HALF_EVEN" in (DEMO_HARD / "ledgerline" / "money.py").read_text()
+    assert record.status == "awaiting_approval"  # not applied
 
 
 # ------------------------------------------------------------- fallback

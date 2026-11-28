@@ -13,6 +13,34 @@ retrieval runs in-memory with no database — but the RAG layer is genuinely
 hybrid (AST-aware chunks, BM25 **and** local vector similarity, reciprocal rank
 fusion), not just term-overlap search.
 
+### Live deployment
+
+**Live demo: https://rag-a-thon.onrender.com/** (Render, free tier).
+
+- On Render, **fastembeddings cannot be used because of usage limits** — the
+  deployment makes do with the deterministic hashed bag-of-n-grams embedder
+  (`FIXORA_EMBEDDER=hash`, baked into the Docker image) and everything runs
+  **noticeably slower**: cold starts after ~15 minutes of inactivity, a shared
+  0.1 vCPU, tighter Groq free-tier token budgets, and shallower retrieval than a
+  local fastembed run.
+- **For the best (and intended) experience, run Fixora locally** — or on your
+  own container/VM where the fastembed model can be downloaded once and cached.
+  See [Render](#render) for exactly what the hosted demo is and what it isn't.
+
+### Scope note
+
+Fixora was built in a **12-hour hackathon window with no paid API access and no
+hardware to run a model locally** — only free-tier hosted providers
+(Groq) and CPU-only embeddings. As a direct consequence, **it cannot handle
+complex, real-world GitHub repositories as of now**: large codebases, multi-file
+bug clusters, big dependency trees and non-pytest suites are beyond what the
+fixtures here exercise and what free-tier token budgets sustain. That gap is a
+resource constraint, not a design limit — see
+[Known shortfalls](#known-shortfalls-honest-list) and
+[Future improvements](#future-improvements). The repo is **not obsolete**: it
+already does real, useful work on small Python repos with failing tests — and
+the architecture generalises once there's time, money and compute.
+
 ### Problem & solution
 
 **Problem.** Small Python codebases with failing tests burn human time on
@@ -382,13 +410,33 @@ docker run --rm -p 8000:8000 -e LLM_PROVIDER=mock fixora
 
 The image builds `frontend/dist` in a Node stage, copies it into a slim Python
 runtime with git, installs `requirements.txt` (including `fastembed==0.9.1`)
-and pre-downloads BAAI/bge-small-en-v1.5 at build time (falls back to the hash
-embedder if the download fails), then serves UI + API on `${PORT:-8000}` as a
-non-root user.
+and pre-downloads BAAI/bge-small-en-v1.5 at build time on a best-effort basis.
+The image defaults to `FIXORA_EMBEDDER=hash` (no hub probe, no download stall,
+and no hard dependence on the pre-download); set `FIXORA_EMBEDDER=auto` to
+re-enable fastembed where the build cache is trustworthy. Serves UI + API on
+`${PORT:-8000}` as a non-root user.
 It does not include a real `.env`; pass provider keys with `-e` only if you
 understand the risk. **Note:** Docker was not available in the build sandbox
 used by the maintainer agent, so this image is written but not built/verified
 there — `docker build -t fixora .` is the command to run where Docker exists.
+
+### Render
+
+**Live deployment: https://rag-a-thon.onrender.com/** — a Render **Web Service** (Docker runtime; Render injects `PORT`). The hosted demo is a convenience preview, not the recommended way to run Fixora: on Render, **fastembeddings can't be used because of usage limits**, so the deployment pins `FIXORA_EMBEDDER=hash`, which is deterministic but much weaker for retrieval — and the whole process (cold starts, pytest, LLM round-trips) is **noticeably slower** than a local run on real hardware. **Run locally for best performance** (see [Setup](#setup)); the hosted demo is best-effort and its state (run registry, logs, memory) is wiped on every redeploy.
+
+Environment variables on Render (never commit keys):
+
+- `LLM_PROVIDER=groq`, `GROQ_API_KEY=gsk-...`, `GROQ_MODEL=openai/gpt-oss-120b` (default in `.env.example`) — or your chain via `LLM_PROVIDERS=groq,openai`.
+- `FIXORA_EMBEDDER=hash` — already the image default (see Dockerfile ENV). fastembed cannot be used on the free Render instance (usage limits); the hashed embedder needs no downloads or network, but retrieval is shallower and the process is slower end to end. Set `FIXORA_EMBEDDER=auto` only on a host with persistent disk and bandwidth for the one-time ~30 MB model download.
+- `FIXORA_ALLOW_DEPENDENCY_INSTALL=0` — demos need no installs; saves a slow pip resolve on every run that a repo declares deps.
+- `MAX_TOOL_STEPS` (default 12) — raise to 16–20 if runs often stop on the tool-step budget (see below).
+
+Honest performance notes: Render's free web service spins down after ~15 minutes of inactivity and the next request pays a 30–60 s cold start; shared 0.1 vCPU makes pytest + retrieval sluggish. Every LLM call and phase is timed in the run log (`timings`), which separates provider latency from sandbox latency. Keep the tab open while runs execute (the UI streams over SSE).
+
+Two failure modes look similar but need different fixes:
+
+- **Run stops with "The agent ran out of tool steps before finishing … press Resume"** (`status=error`): the fix phase exhausted `MAX_TOOL_STEPS` without converging. Partial work is kept; press **Resume run** — only the failed node re-runs with a fresh budget, the baseline and analyse/plan are not repeated, and you are *not* sent back to the start. Resume repeatedly if needed; each resume grants one more budget.
+- **A built-in demo shows "4 passed, 0 failed" at baseline**: that cannot come from this repository — both newer demos are collection-blocked at HEAD in every invocation mode, and the fixtures carry seeded bugs. It means the deployed image is not this tree: a stale Render build cache or an image built from a working tree whose checked-in fixture had been rewritten by an approved `--repo ./demo_repo* --yes` run (guarded since `c17c654`; see "Demo repos"). Fix: check the service builds the intended branch, then redeploy with **"Clear build cache"**, and confirm the demo picker shows Skylark/Meridian with collection-blocked baselines.
 
 ### Vercel (static frontend)
 
@@ -512,6 +560,18 @@ JSON log in `logs/`.
 - `demo_repo_import/` ("meridian") — an import of the wrong name from an internal
   module (`stock_level` vs `stock_count`) blocks collection; the fix needs two
   edits (import line, then the call site), exercising the retry loop.
+
+Fixture safety invariant: the demo *picker* runs every demo on a temporary
+copy and approvals only export a patch — the checked-in fixtures are never
+modified. The CLI `--repo ./demo_repo* --yes` path is guarded the same way
+(`approve()` refuses to write into a built-in fixture, HTTP 409, with restore
+instructions): applying a fix there would silently repair the seeded bug and
+the demo would then start with a green suite forever — the classic cause of a
+deployed instance showing "4 passed, 0 failed" at baseline. Local direct
+pytest runs of each demo: `cd demo_repo_import && python -m pytest` (or any
+`pytest` invocation; each demo has its own `pyproject.toml` with
+`pythonpath = ["."]`). Note the four demos cannot share one root-level pytest
+process — they intentionally duplicate test basenames; run them one at a time.
 
 ## Speed / latency notes
 
@@ -683,7 +743,7 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # 150 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
+python -m pytest tests/                   # 178 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
 python scripts/verify_rag.py              # one-command RAG + embeddings end-to-end check (FIXORA_EMBEDDER=auto by default)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
@@ -725,11 +785,170 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 - `Dockerfile` / `.dockerignore` — single-image API + built UI
 - `tests/` — unit tests for the sandbox, tools, graph routing, caching,
   approval gate, GitHub validation, provider fallback, hybrid retrieval/AST
-  chunking/query-assist fallbacks and cross-run memory (150 passing)
+  chunking/query-assist fallbacks and cross-run memory (178 passing)
 - `ARCHITECTURE.md` / `DEMO.md` / `SLIDES_OUTLINE.md` — architecture, demo
   script and presentation outline
 - `logs/` — JSON run logs and approval patches (gitignored)
 - `SPEC.md` — architecture note + phase status
+
+## Strengths
+
+Honest inventory of what actually works, verified by measurement (not by the model's claims):
+
+- **The approval gate actually gates.** Nothing touches the original repo until a
+  human approves (`--yes` / `POST /runs/{id}/approve`); demos and GitHub clones
+  only ever produce a patch file; `approve()` refuses to write into a checked-in
+  demo fixture (409), so a built-in demo can never silently become green.
+- **Tests are ground truth.** Pass/fail, failing test names and the before/after
+  diff come from real pytest subprocesses (exit codes, counts parsed from output) —
+  never from the LLM. The UI shows the same numbers the pytest run printed.
+- **Resilient agent loop.** Retryable provider errors switch to the next key
+  monotonically (never flaps key1→key2→key1) with a user-safe “Switching to next
+  API key” event; a run that dies mid-graph **resumes from the failed node**
+  (LangGraph checkpoint) instead of restarting — and since the tool-step cap now
+  stops loudly in the resumable state, an exhausted fix budget is also a Resume,
+  not a restart.
+- **Deterministic tool-calling.** OpenAI-compatible providers get `temperature=0`
+  (omitted only for strict o-series/gpt-5 models) and `parallel_tool_calls=False`;
+  provider tool-validation 400s get a schema-aware corrective message (tool
+  required-properties + skeleton call); pseudo-tools (`json`/`commentary`) are
+  tolerated and never executed. This cured recurring `apply_patch` 400s on Groq.
+- **Real, free RAG.** AST-aware chunks (function/class/test/module + fallback
+  line windows), BM25 **and** local-vector similarity, Reciprocal Rank Fusion,
+  failure-driven queries built from the actual failing tests and diagnosis —
+  fully offline, no hosted vector DB, no API keys. fastembed when available,
+  hashed bag-of-n-grams otherwise.
+- **Hermetic test suite.** 178 tests, all passing, offline-by-default
+  (`FIXORA_EMBEDDER=hash`), with a deterministic mock provider for pipeline
+  smoke tests — the suite needs no network and no keys.
+- **Sandbox confinement.** Copied workspace, path-escape protection (blocks
+  `..` and symlinks), allowlisted shell-less commands with timeouts, a minimal
+  environment for subprocesses (host keys never reach repo code), bytecode
+  invalidation after every edit (stale `.pyc` can no longer fake a green run).
+- **Failure taxonomy as first-class input.** Every test run is classified
+  (syntax_error, import_error, dependency_missing, assertion_failure, …) with
+  category-specific guidance injected into the fix prompt — this is what makes
+  the demos with *collection errors* fixable by the agent at all.
+- **Honest UI.** Timeline events are derived from server-side state; provider
+  internals (keys, org IDs, raw 400 bodies) never reach the dashboard; test
+  counts are rendered from pytest, not from a model's message.
+- **Cross-run memory with labelled hints** — recalled lessons are clearly
+  marked as hints and never bypass the approval gate; failure is silent by
+  design, never crashes a run.
+- **Single-image Docker deploy** (`Dockerfile`): Node builds the UI, slim
+  Python runtime serves UI + API on one port.
+- **Small enough to audit** — the whole agent is a few thousand lines, with
+  `ARCHITECTURE.md`, `SPEC.md` and `DEMO.md` alongside.
+
+## Known shortfalls (honest list)
+
+- **Built for small fixtures, not complex real-world repos — yet.** The project
+  was made in a **12-hour hackathon with no paid API keys and no local GPU**;
+  everything here is sized to that: tiny demo fixtures, free-tier Groq at 8k
+  TPM, CPU-only hashed embeddings, a 50 MB clone cap, and a pytest-only pass/fail
+  signal. Fixora does not currently handle complex real GitHub repositories —
+  monorepos, compiled dependencies, deep multi-bug clusters, huge test suites —
+  and pretending otherwise would be dishonest. This is a resource constraint
+  (time, API budget, hardware), not a dead end; the path out is in
+  [Future improvements](#future-improvements).
+- **The public Render demo is degraded by construction.** fastembed cannot be
+  used on the free Render instance (usage limits), so the deployment is pinned
+  to the hashed bag-of-n-grams embedder: retrieval is shallow, runs are slower
+  end to end, cold starts after ~15 min idle cost 30–60 s, everything shares a
+  0.1 vCPU, and the Groq free tier's 8k TPM forces aggressive prompt
+  compaction. **Run locally** (or on your own host) for the intended experience.
+- **No persistent state anywhere.** Run registry, workspaces, `logs/` and
+  `logs/memory.json` are all ephemeral (in-memory registry + local disk).
+  Redeploys and restarts lose run history, memory and resumability; one run
+  per process; no horizontal scaling; the in-process `MemorySaver` checkpoint
+  dies with the process.
+- **pytest-centric verification.** The fix loop's pass/fail signal is pytest;
+  non-Python repos (or pytest-less Python repos) cannot be closed-loop
+  verified, and the Python-only AST chunker applies.
+- **Exact-match editing.** `apply_patch` requires a unique text anchor; no
+  fuzzy/whitespace-tolerant matching. Large multi-site edits can burn the tool
+  budget (now failed-loud + resumable) even when the model is otherwise right.
+- **LLM quality is the ceiling.** The offline `mock` proves the pipeline, not
+  the reasoning; real behaviour needs Groq/xAI/Anthropic/OpenAI keys — and free
+  tiers rate-limit (8k TPM → forced compaction → occasional 413s/400s). Prompt
+  injection from repo content is mitigated but not eliminated.
+- **Memory can mislead.** Lessons are similarity-ranked heuristics from past
+  *outcomes*, not truth-checked facts; a wrong lesson can nudge the agent
+  (never past the approval gate, but wrong).
+- **No CI in this repo.** Tests are run manually; the Docker image has not
+  been built/verified in this environment; the frontend has not been
+  browser-verified (Playwright was blocked); demo fixtures are intentionally
+  tiny (4–14 tests) — real-world monorepos, compiled deps and 50 MB+ repos are
+  unverified territory (`MAX_REPO_MB=50`).
+- **Weak hosted-security posture.** The API has no auth by default
+  (`FIXORA_API_TOKEN` optional); CORS defaults to localhost; the public Render
+  instance will happily serve anyone who finds it — your quota, and patch
+  exports, are exposed if the URL leaks.
+- **Local apply is file-granular, not hunk-level.** Approved local runs
+  rewrite the changed files wholesale (and propagate deletes); there is no
+  queue, no concurrent runs, and no per-run cost/token accounting beyond
+  `RUN_TIMEOUT` and `MAX_TOOL_STEPS`.
+- **Reviewer is an LLM call too** — verdicts vary by model/provider; it can
+  REJECT valid minimal fixes or APPROVE subtle breakage (the test suite
+  must also pass, which mitigates but does not eliminate this).
+- **Logs grow without rotation** in `logs/`; cross-run memory is a flat JSON
+  file with a 50-lesson cap.
+- **No network-grounded knowledge** — no web search, no docs; the agent knows
+  only your repo, its parametric knowledge, and local retrieval.
+
+## Future improvements
+
+- **Persistence & scale:** SQLite/Postgres run registry, Redis-backed queue
+  (RQ/Celery), resume **across** restarts and machines; horizontal workers;
+  persistent memory store with TTL + truth-checking of lessons; cap rotation
+  and retention policies for logs.
+- **Retrieval:** promote fastembed (or a small cross-encoder reranker) as the
+  default where bandwidth permits; persistent per-repo vector index with
+  incremental re-embedding on file change; better handling of very large
+  repos (hierarchical retrieval: file-level → chunk-level).
+- **Editor:** fuzzy/whitespace-tolerant `apply_patch`, AST-aware edit
+  operations (insert/replace/delete at node), unique-anchor search fallback,
+  multi-file transactions with automatic rollback on failure.
+- **Multi-language verification:** detect pytest/unittest/npm/go/cargo/
+  maven-gradle test suites; language-specific chunkers; generic pass/fail
+  parsers so the loop can close outside Python.
+- **CI/CD for the repo itself:** GitHub Actions (tests + frontend build +
+  fixture baselines on every PR), a Playwright smoke of the approval flow,
+  automated Docker image build & boot check, and release automation
+  (versioning, changelog, published image/wheel).
+- **Robustness & economics:** retry-with-budget on 429/5xx instead of hard
+  stop; provider health scoring and automatic model degradation (120b→20b
+  under pressure); per-run token/cost meters with hard budgets;
+  `FIXORA_API_TOKEN` required by default on non-localhost binds; per-IP rate
+  limiting for hosted demos.
+- **Safety:** protected-paths policy (never edit `tests/`, migrations, key
+  material), pre-approval secret scan of the diff, git checkpoint of the
+  target repo before local apply (one-command rollback), signed patches for
+  GitHub flows.
+- **Quality & evaluation:** SWE-bench-style benchmark harness in-repo,
+  fix-rate/regression tracking per model, prompt packs tuned per provider,
+  memory-lesson validation before injection.
+- **UI:** inline diff editing + re-verify before approval, run history with
+  filters, token/cost panels, model picker with health probes, export a run
+  as an issue/PR draft.
+- **Fixtures:** real-world Python repos with seeded multi-bug themes,
+  flaky-test discrimination fixtures, and merge-conflict fixtures to exercise
+  the retry loop harder.
+
+**Path to real GitHub repositories — and why this repo is not obsolete.**
+Nothing above requires re-architecting Fixora; it requires resources. With a
+paid or frontier model (or local GPU hardware for inference and embeddings),
+real CI, and repo budget lines raised to match (`MAX_REPO_MB`,
+`MAX_TOOL_STEPS`, `RUN_TIMEOUT`, a persistent vector index), the same
+sandbox → baseline → analyse → fix ⇄ test → review → approval pipeline covers
+complex, real-world GitHub repositories. The staged path is: (1) point the
+agent at *small, real* internal Python services and measure fix-rate; (2) add
+CI + neural retrieval on a persistent volume; (3) lift the clone/tool budgets
+once evaluation is green. Until then the tool is exactly what it says it is —
+an autonomous fixer for small Python repos with failing tests, with a human
+approving every consequential change — which is genuinely useful: pre-commit
+triage, demo-driven development, teaching agentic workflow, and internal
+tooling where the stakes are low and the reviewer is you.
 
 ## What is deliberately out of scope
 

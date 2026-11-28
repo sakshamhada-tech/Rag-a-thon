@@ -35,6 +35,15 @@ class LLMError(Exception):
     """Raised for missing keys, API failures, or malformed responses."""
 
 
+class ToolStepCapError(LLMError):
+    """A phase consumed its tool-step budget (MAX_TOOL_STEPS) without
+    converging. Raised instead of silently truncating the phase so the run
+    stops in the resumable 'error' state with partial work preserved — the
+    user can Resume (fresh step budget, checkpoint kept) instead of starting
+    from scratch.
+    """
+
+
 _FRIENDLY_RULES = [
     (re.compile(r"(413|request too large|too many tokens|reduce your message|"
                 r"context length|context window|maximum context|token limit)", re.I),
@@ -56,6 +65,9 @@ _FRIENDLY_RULES = [
      "The provider is temporarily unavailable. Try again shortly, or configure a fallback provider."),
     (re.compile(r"(insufficient_quota|billing|payment required|402)", re.I),
      "The provider reports a billing/quota problem. Check your plan and billing settings."),
+    (re.compile(r"tool[- ]step budget", re.I),
+     "The agent ran out of tool steps before finishing. Partial work is kept — "
+     "press Resume to continue with a fresh step budget instead of starting over."),
 ]
 
 
@@ -176,6 +188,14 @@ def _supports_reasoning(model: str, base_url: str | None) -> bool:
     return any(m in (model or "").lower() for m in markers)
 
 
+def _supports_temperature(model: str) -> bool:
+    """Strict reasoning models (o-series, gpt-5) reject any temperature other
+    than the default — omit it there. Everywhere else pin temperature=0 so tool
+    calls stay schema-faithful instead of sampling at temperature=1."""
+    m = (model or "").lower()
+    return not any(x in m for x in ("o1", "o3", "o4", "gpt-5"))
+
+
 # ---------------------------------------------------------------- Anthropic
 
 class AnthropicClient:
@@ -189,7 +209,8 @@ class AnthropicClient:
         self.model = model
         self.provider_label = "anthropic"
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system") or None
         convo: list[dict] = []
         for m in messages:
@@ -214,7 +235,8 @@ class AnthropicClient:
                      "content": m["content"]}]})
         anthropic_tools = [{"name": t["name"], "description": t["description"],
                             "input_schema": t["parameters"]} for t in tools]
-        kwargs = dict(model=self.model, max_tokens=4096, messages=convo)
+        kwargs = dict(model=self.model, max_tokens=max_tokens or 4096, messages=convo,
+                      temperature=0)
         if system:
             kwargs["system"] = system
         if anthropic_tools:
@@ -241,7 +263,8 @@ class OpenAIClient:
         self.provider_label = provider_label
         self.supports_reasoning = _supports_reasoning(model, base_url)
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         oai: list[dict] = []
         for m in messages:
             role = m["role"]
@@ -265,9 +288,14 @@ class OpenAIClient:
         oai_tools = [{"type": "function",
                       "function": {"name": t["name"], "description": t["description"],
                                    "parameters": t["parameters"]}} for t in tools]
-        kwargs: dict = dict(model=self.model, messages=oai, max_tokens=4096)
+        kwargs: dict = dict(model=self.model, messages=oai, max_tokens=max_tokens or 4096)
         if oai_tools:
             kwargs["tools"] = oai_tools
+            # Sequential calls only: parallel calls multiply the odds of one
+            # malformed element taking down the whole request with a 400.
+            kwargs["parallel_tool_calls"] = False
+        if _supports_temperature(self.model):
+            kwargs["temperature"] = 0
         if reasoning_effort and self.supports_reasoning:
             kwargs["reasoning_effort"] = reasoning_effort
         try:
@@ -309,7 +337,8 @@ class MockClient:
                     return mm.group(1).lower()
         return "fix"
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         self._n += 1
         phase = self._phase(messages)
         tool_results = [m for m in messages if m["role"] == "tool"]
@@ -440,7 +469,8 @@ class FallbackLLMClient:
         self.clients = clients
         self._cursor = 0  # index into clients; only ever increases
 
-    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None) -> LLMResponse:
+    def chat(self, messages: list[dict], tools: list[dict], reasoning_effort: str | None = None,
+             max_tokens: int | None = None) -> LLMResponse:
         n = len(self.clients)
         last_error: LLMError | None = None
         for idx in range(self._cursor, n):
@@ -448,7 +478,13 @@ class FallbackLLMClient:
             label = getattr(client, "provider_label", f"provider-{idx}")
             for attempt in range(2):
                 try:
-                    resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
+                    try:
+                        resp = client.chat(messages, tools, reasoning_effort=reasoning_effort,
+                                           max_tokens=max_tokens)
+                    except TypeError as exc:
+                        if "max_tokens" not in str(exc):
+                            raise
+                        resp = client.chat(messages, tools, reasoning_effort=reasoning_effort)
                     if resp.usage:
                         _log_usage(label, resp.usage)
                     return resp

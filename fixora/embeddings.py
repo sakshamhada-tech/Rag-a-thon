@@ -20,8 +20,63 @@ import hashlib
 import math
 import os
 import re
+import socket
+import ssl
+
+from pathlib import Path
+import tempfile
 
 from ._codetok import tokenize
+
+_NET_PROBE_CACHE: dict[tuple, bool] = {}
+
+
+def _fastembed_model_cached(model_name: str) -> bool:
+    """Best-effort check for a usable on-disk fastembed model payload.
+
+    Mirrors fastembed's default cache locations (FASTEMBED_HOME, ~/.cache/fastembed,
+    <tmp>/fastembed_cache). A directory that exists but holds no payload files
+    (e.g. a half-finished download) does NOT count as cached.
+    """
+    slug = model_name.split("/")[-1]
+    bases = []
+    home = os.environ.get("FASTEMBED_HOME")
+    if home:
+        bases.append(Path(home))
+    bases.append(Path.home() / ".cache" / "fastembed")
+    bases.append(Path(tempfile.gettempdir()) / "fastembed_cache")
+    payload_ext = {".onnx", ".bin", ".model", ".json"}
+    for base in bases:
+        root = base / slug
+        if not root.is_dir():
+            continue
+        for child in root.rglob("*"):
+            if child.is_file() and child.suffix.lower() in payload_ext:
+                return True
+    return False
+
+
+def _network_reachable(host: str = "huggingface.co", port: int = 443, timeout: float = 3.0) -> bool:
+    """True only if a real TLS handshake to the host succeeds.
+
+    Sandboxes/proxies may accept the TCP connect and then drop the TLS session;
+    the fastembed library would then burn ~40 s retrying before giving up, so
+    we probe the handshake itself. Result memoised per host:port.
+    """
+    key = (host, port)
+    cached = _NET_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    ok = False
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                ok = tls.version() is not None
+    except (OSError, ssl.SSLError):
+        ok = False
+    _NET_PROBE_CACHE[key] = ok
+    return ok
 
 
 class HashEmbedder:
@@ -59,6 +114,14 @@ class FastembedEmbedder:
         # If the model is already cached, load strictly from disk so offline runs
         # never contend with the hub. When nothing is cached yet (first run), fall
         # through to the normal path — a one-time ~30 MB download.
+        # Never call into fastembed's download path when the hub is unreachable:
+        # the library retries with sleeps (~40 s) before giving up. Decide up
+        # front from cache presence + a cheap network probe.
+        if not _fastembed_model_cached(model_name) and not _network_reachable():
+            raise RuntimeError(
+                "fastembed model not cached and huggingface.co unreachable; "
+                "using the hash embedder instead. Set FIXORA_EMBEDDER=hash to "
+                "skip this probe, or pre-download the model to enable fastembed.")
         try:
             self._model = TextEmbedding(model_name, local_files_only=True)
         except Exception:

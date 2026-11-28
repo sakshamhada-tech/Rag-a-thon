@@ -11,9 +11,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# The image builds fine even if the fastembed pre-download below fails, so
+# pin the deterministic offline hash embedder: no hub probe, no download stall
+# on cold starts. Set FIXORA_EMBEDDER=auto (or fastembed) as a Render env var
+# to re-enable the neural embedder (build-time cache must be present).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8000
+    PORT=8000 \
+    FIXORA_EMBEDDER=hash
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 # fastembed ships in requirements.txt; pre-download the model at build time so
