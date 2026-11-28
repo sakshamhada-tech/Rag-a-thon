@@ -4,6 +4,7 @@ import type { FixoraEvent } from '../api/types';
 import { EmptyState } from './EmptyState';
 import { StepRow } from './StepRow';
 import { ToolCallRow } from './ToolCallRow';
+import { AgentRoster } from './AgentRoster';
 
 interface Props {
   events: FixoraEvent[];
@@ -83,6 +84,7 @@ export function Timeline({ events, status, sseStatus, error }: Props) {
         {live && <span className="status-chip status-running"><Radio aria-hidden="true" className="icon" /> running</span>}
       </div>
 
+      <AgentRoster events={events} status={status} />
       <div ref={scrollRef} className="timeline-scroll" onScroll={handleScroll} tabIndex={0} aria-label="Run event timeline">
         {error && <div className="inline-notice" role="alert" style={{ borderLeftColor: 'var(--danger)', color: 'var(--danger)', marginBottom: 'var(--space-3)' }}>{error}</div>}
         {items.length === 0 ? (

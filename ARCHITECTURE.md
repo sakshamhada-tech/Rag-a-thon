@@ -1,8 +1,9 @@
 # Fixora — Architecture
 
-Fixora is a LangGraph agent that repairs Python repositories under a hard
-human-approval gate. This document maps the moving parts; `SPEC.md` records the
-phase-by-phase history and the honest "not verified" lists.
+Fixora is a LangGraph-orchestrated three-agent team (Developer, Tester,
+Reviewer) that repairs Python repositories under a hard human-approval gate.
+This document maps the moving parts; `SPEC.md` records the phase-by-phase
+history and the honest "not verified" lists.
 
 ## Agent loop
 
@@ -30,6 +31,16 @@ Retry semantics: reviewer rejection re-enters `fix` with the reviewer's issues;
 a failing test re-enters `fix` with the failing output. Both count toward
 `MAX_ATTEMPTS` (default 3). A passing suite is **not** enough — the run stops at
 `awaiting_approval` and nothing touches the original repo until a human acts.
+
+Agent attribution: every emitted event is auto-tagged with the responsible
+agent (`fixora/events.py` — `node=analyse|plan|fix` or
+`type=retrieval|memory|retry` → `developer`; `node=test|baseline` or
+`type=test_result` → `tester`; `node=review` or `type=review_verdict` →
+`reviewer`). The tag flows into the CLI log, the SSE stream and the
+`/runs/{id}` state dump. The web UI renders a live **agent roster** at the top
+of the timeline (`frontend/src/components/AgentRoster.tsx`): the agent behind
+the newest tagged event is shown as *working*, agents that already acted as
+*done*, the rest as *idle*.
 
 ## Hybrid retrieval pipeline
 

@@ -5,6 +5,7 @@ export interface FixoraEvent {
   ts: string;
   run_id: string;
   type: string;
+  agent?: 'developer' | 'tester' | 'reviewer' | string;
   node?: string;
   message?: string;
   tool?: string;

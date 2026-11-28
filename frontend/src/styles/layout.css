@@ -252,3 +252,31 @@ html.resizing-panels, html.resizing-panels * { cursor: col-resize !important; us
 .retrieval-loc { font-size: var(--text-xs); color: var(--text); overflow-wrap: anywhere; }
 .retrieval-snippet { margin: var(--space-1) 0 0; font-size: var(--text-xs); line-height: 1.4; max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
 .event-detail details > summary { cursor: pointer; color: var(--text-faint); font-size: var(--text-xs); padding: var(--space-1) 0; }
+
+/* ------------------------------------------------- Agent team roster
+   Live line-up of the three agents at the top of the timeline panel. */
+.agents-roster { padding: var(--space-3) var(--space-4) 0; }
+.agents-roster-title { font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); margin-bottom: var(--space-2); }
+.agents-roster-title .mono { color: var(--text-muted); }
+.agents-roster-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.agent-card { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md, 10px); background: var(--surface-2); min-width: 0; transition: border-color 160ms ease, opacity 160ms ease; }
+.agent-card-icon { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; border: 1px solid var(--border-strong); color: var(--text-muted); background: var(--surface); }
+.agent-card-icon .icon { width: 14px; height: 14px; }
+.agent-card-body { min-width: 0; display: grid; gap: 2px; }
+.agent-card-head { display: flex; align-items: center; gap: var(--space-2); justify-content: space-between; }
+.agent-card-name { font-weight: 600; font-size: var(--text-sm); }
+.agent-status { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); white-space: nowrap; }
+.agent-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.agent-status.status-working { color: var(--accent); }
+.agent-status.status-working .agent-status-dot { background: var(--accent); animation: agentPulse 1.15s ease-in-out infinite; }
+.agent-status.status-done { color: var(--success); }
+.agent-status.status-done .agent-status-dot { background: var(--success); }
+.agent-card-activity { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-card.state-working { border-color: var(--accent); }
+.agent-card-developer.state-working .agent-card-icon { color: var(--accent); border-color: var(--accent); }
+.agent-card-tester.state-working .agent-card-icon { color: var(--success); border-color: var(--success); }
+.agent-card-reviewer.state-working .agent-card-icon { color: var(--warning); border-color: var(--warning); }
+.agent-card.state-idle { opacity: 0.62; }
+@keyframes agentPulse { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 4px var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) { .agent-status.status-working .agent-status-dot { animation: none; } }
+@media (max-width: 900px) { .agents-roster-grid { grid-template-columns: 1fr; } }

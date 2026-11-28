@@ -4,6 +4,9 @@ import type { FixoraEvent } from '../api/types';
 export type AgentKind = 'developer' | 'tester' | 'reviewer' | 'system';
 
 function agentFor(event: FixoraEvent): AgentKind {
+  const tagged = String(event.agent || '').toLowerCase();
+  if (tagged === 'developer' || tagged === 'tester' || tagged === 'reviewer') return tagged;
+  // fallback for events without a server-side agent tag
   const node = String(event.node || event.type || '').toLowerCase();
   if (node.includes('review')) return 'reviewer';
   if (node.includes('test') || node.includes('baseline')) return 'tester';

@@ -2,9 +2,11 @@
 
 **From Generative AI to Agentic AI — hackathon project.**
 Fixora is an autonomous coding agent that takes a Python repo plus a task,
-analyses the repo, finds the bug, patches it, runs the real test suite, gets a
-second opinion from a Reviewer agent, and reports the result — from the CLI or
-from a small FastAPI server with live events.
+analyses the repo, finds the bug, patches it, and reports the result — from
+the CLI or from a small FastAPI server with live events. Three real LLM
+agents do the work — a **Developer**, a **Tester** and a **Reviewer** —
+orchestrated by a LangGraph supervisor; the same team shows up live in the
+web UI as an agent roster.
 
 Small and working beats big and half-working: PR creation is out of scope, and
 retrieval runs in-memory with no database — but the RAG layer is genuinely
@@ -62,6 +64,11 @@ anywhere.
   routes back to `fix` with reviewer issues in context and counts toward
   `MAX_ATTEMPTS`. A hard code rule flags diffs under `tests/` and forces
   rejection when assertions or test functions were removed/loosened.
+- **Agent team**: the Developer, Tester and Reviewer are distinct LLM agents —
+  separate prompts, separate tool permissions, separate failure behaviours —
+  coordinated by one LangGraph supervisor in one process with a shared graph
+  state (see **Multi-agent setup** below). Every emitted event carries an
+  `agent` tag (`developer`/`tester`/`reviewer`); the UI shows the team live.
 - **LLM**: provider-agnostic wrapper with native tool calling.
   `LLM_PROVIDER=groq` (Groq Cloud, free tier), `xai` (Grok), `anthropic` or
   `openai`; keys/models from `.env`. `LLM_PROVIDERS` enables a fallback chain
@@ -70,6 +77,48 @@ anywhere.
   timeout, in-memory state plus JSON log on disk (`logs/`, gitignored).
   `GET /health`, `GET /config`, `GET /demos`, `GET /memory` (cross-run lesson
   store), and `GET /openapi.json`/`/docs` for the interactive API reference.
+
+## Multi-agent setup
+
+Fixora runs **three real LLM agents**, orchestrated by a LangGraph supervisor
+(`fixora/agents/graph.py`). They are separate agents in the meaningful sense —
+distinct system prompts, distinct phase permissions, distinct tool sets — not
+one prompt role-playing three hats:
+
+| Agent | Nodes | Prompt / role | Tools |
+|-------|-------|---------------|-------|
+| **Developer** | `analyse`, `plan`, `fix` | `PHASE: <phase>` — "You are Fixora's Developer agent…" (`fixora/agents/developer.py`) | read-only tools (`list_tree`, `read_file`, `search_code`, `search_semantic`, `get_dependencies`, `retrieve_code`) in analyse/plan; adds `write_file` / `apply_patch` only in fix |
+| **Tester** | `baseline`, `test` | runs the real pytest suite in the sandbox before and after every attempt (`fixora/agents/tester.py`) | `run_tests` (deterministic — the model never decides whether tests pass) |
+| **Reviewer** | `review` | read-only second opinion on the diff; strict JSON verdict `{verdict, issues, risk, summary}` (`fixora/agents/reviewer.py`) | read tools only; a hard code rule flags diffs that loosen tests |
+
+Supervisor routing: `baseline → analyse → plan → fix ⇄ test → review →
+report`, with two feedback loops — a failing `test` routes back to `fix` with
+the failure diagnosis in context (bounded by `MAX_ATTEMPTS`), and a `reject`
+verdict from the Reviewer routes back to `fix` with the reviewer's issues in
+context (also bounded). A passing `review` ends at `report` with status
+`awaiting_approval`; nothing is written to the original repo until a human
+approves.
+
+Honest boundaries: the team is **one process with one shared graph state** —
+no network between agents, no queue, no inter-agent RPC, no second host. The
+agents never talk to each other directly; they coordinate through the
+LangGraph state and the event bus, and the Tester and Reviewer are
+deliberately independent of the Developer (they re-run the suite and re-read
+the diff instead of trusting the Developer's claims).
+
+Every event the system emits is automatically tagged with the responsible
+agent (`fixora/events.py`: `node=analyse|plan|fix`, `type=retrieval|memory|retry`
+→ `developer`; `node=test|baseline`, `type=test_result` → `tester`;
+`node=review`, `type=review_verdict` → `reviewer`). The tag flows into the CLI
+log, the SSE stream and the `/runs/{id}` state dump, so the UI needs no
+string-matching to show who did what. The web UI renders this as a live
+**agent roster** at the top of the timeline
+(`frontend/src/components/AgentRoster.tsx`): three cards (Developer / Tester /
+Reviewer) where the agent behind the newest tagged event is *working* (pulsing
+dot), agents that already acted are *done*, and the rest *idle*; a terminal
+run marks everyone `done`. Each card shows the agent's latest activity line
+(tool name, pytest counts, review verdict, retrieved chunk count or recalled
+lessons).
 
 ## Tech stack (every model, API, framework, dataset and tool)
 
@@ -83,10 +132,13 @@ anywhere.
   them or `mock` (offline, deterministic, smoke-testing only — not an LLM).
 - **Groq llama-3.3-70b-versatile** — used earlier in development; retired for
   free/dev tiers on 2026-08-16; documented, not required.
-- **BAAI/bge-small-en-v1.5** (384-dim) — embedding model, only if
-  `FIXORA_EMBEDDER=fastembed` is chosen explicitly (optional; weights fetched
-  from Hugging Face at install/image-build time).
-- **Local hashed bag-of-n-grams embedder** — default embedding model; a
+- **fastembed 0.9.1 + BAAI/bge-small-en-v1.5** (384-dim, ONNX) — preferred
+  embedding model; pinned in `requirements.txt` and used by default
+  (`FIXORA_EMBEDDER=auto`); weights fetched from Hugging Face on first use
+  (~30 MB, then cached and loaded strictly from disk). Verified with
+  `python scripts/verify_rag.py`.
+- **Local hashed bag-of-n-grams embedder** — zero-network fallback embedding
+  model (`FIXORA_EMBEDDER=hash`, or `auto` when fastembed is unavailable); a
   deterministic 384-dim hashed n-gram encoder written from scratch for this
   project (no pretrained weights, fully offline, zero cost).
 - **Gemini free embedding API** — considered and rejected (keeps the zero-cost,
@@ -96,8 +148,8 @@ anywhere.
 - **Google / any other embedding API** — not used.
 
 **Frameworks & libraries**
-- **LangGraph** (agent graph: baseline→analyse→plan→fix→test→review→report;
-  retry routing, TypedDict state) · **FastAPI** + **Uvicorn** (API + SSE +
+- **LangGraph** (supervisor for the three-agent team: baseline→analyse→plan→fix→test→review→report;
+  retry routing, TypedDict state; every emitted event carries its agent tag) · **FastAPI** + **Uvicorn** (API + SSE +
   static UI) · **Pydantic** · **rank_bm25** (BM25Okapi) · **numpy** (pulled in
   by rank_bm25) · **openai** and **anthropic** Python SDKs · **pytest**
   (suite runner inside the fix loop and for the repo's own tests) ·
@@ -266,6 +318,11 @@ Set `VITE_API_PROXY_TARGET` from a shell if the API is not on port 8000.
   bottom tabs take over and separators hide.
 - SSE replay/live stream uses event sequence ids and `Last-Event-ID`; the reducer
   dedupes by `seq`.
+- A live **agent roster** tops the timeline: Developer / Tester / Reviewer
+  cards fed by the `agent` tag on every SSE event — newest tagged event =
+  working (pulsing), already acted = done, everything else idle; terminal runs
+  mark all three done. Per-row agent markers in the timeline prefer the same
+  tag, falling back to node-name matching.
 - Diff is rendered by a custom unified-diff parser; tests/review/log tabs show
   real run data only.
 - Approval remains consequential: confirmation step, disabled while in flight,
@@ -279,9 +336,10 @@ docker run --rm -p 8000:8000 -e LLM_PROVIDER=mock fixora
 ```
 
 The image builds `frontend/dist` in a Node stage, copies it into a slim Python
-runtime with git, installs `fastembed` best-effort and pre-downloads
-BAAI/bge-small-en-v1.5 at build time (falls back to the hash embedder if the
-download fails), then serves UI + API on `${PORT:-8000}` as a non-root user.
+runtime with git, installs `requirements.txt` (including `fastembed==0.9.1`)
+and pre-downloads BAAI/bge-small-en-v1.5 at build time (falls back to the hash
+embedder if the download fails), then serves UI + API on `${PORT:-8000}` as a
+non-root user.
 It does not include a real `.env`; pass provider keys with `-e` only if you
 understand the risk. **Note:** Docker was not available in the build sandbox
 used by the maintainer agent, so this image is written but not built/verified
@@ -415,18 +473,27 @@ database, no API keys, no per-token cost.
    back to local ranking, the run is never blocked, counts against Groq rate
    limits (calls are cached per run), and they add nothing when no provider is
    reachable. Set either to 0 to disable.
-5. **Embeddings** — the default is a deterministic, fully offline **hashed
+5. **Embeddings** — **`FIXORA_EMBEDDER=auto` is the default**: Fixora uses the
+   **fastembed** backend — **BAAI/bge-small-en-v1.5** (384-dim) via ONNX
+   (`fastembed==0.9.1`, pinned in `requirements.txt`) — when it is installed,
+   and transparently falls back to a deterministic, fully offline **hashed
    bag-of-n-grams embedder** (384-dim, snake_case/camelCase/digit-aware
-   tokeniser, L2-normalised). It captures lexical similarity (identifiers,
-   error strings, test names) — most of what bug localisation needs — with
-   zero downloads. For neural semantics, `pip install fastembed` and set
-   `FIXORA_EMBEDDER=fastembed` to use **BAAI/bge-small-en-v1.5** (384-dim) via
-   ONNX; the Dockerfile attempts this at build time and falls back to the
-   hash embedder if the download is blocked. Retrieval always works — the
-   backend in use is reported in `stats()` and in the `retrieval` UI event.
-   Groq does **not** offer an embeddings endpoint (checked against
-   `GET /openai/v1/models`); Gemini's free embedding API was considered and
-   rejected to keep the zero-cost, no-keys guarantee.
+   tokeniser, L2-normalised) when it is not. The hash embedder captures
+   lexical similarity (identifiers, error strings, test names) — most of what
+   bug localisation needs — with zero downloads; fastembed adds real neural
+   semantics (synonym/paraphrase matching). Its one-time ~30 MB model download
+   from Hugging Face is cached on disk, and cached models load strictly from
+   disk (`local_files_only`), so subsequent and offline runs never touch the
+   network. The embedder probe is memoised process-wide so repeated
+   retriever constructions do not repeat it. If installation or the download
+   is blocked, retrieval still works — the backend in use is reported in
+   `stats()` and in the `retrieval` UI event. The Dockerfile pre-downloads the
+   model at build time (best effort, falls back to hash). Set
+   `FIXORA_EMBEDDER=hash` to pin the offline fallback, or
+   `FIXORA_EMBEDDER=fastembed` to require fastembed. Groq does **not** offer
+   an embeddings endpoint (checked against `GET /openai/v1/models`); Gemini's
+   free embedding API was considered and rejected to keep the zero-cost,
+   no-keys guarantee.
 6. **Vector store** — a pure-Python in-memory cosine scan over the chunk
    matrix. FAISS was evaluated and deliberately rejected: at the observed
    corpus sizes (<5k chunks for realistic Python repos in this tool's scope) a
@@ -444,8 +511,9 @@ database, no API keys, no per-token cost.
 
 Disable retrieval entirely with `FIXORA_RAG=0`.
 
-Honest limits: neural semantic quality depends on the optional fastembed
-backend — the default hash embedder knows vocabulary, not meaning. Ranking on
+Honest limits: neural semantic quality depends on the fastembed backend being
+installed and downloaded; when Fixora falls back to the hash embedder it knows
+vocabulary, not meaning. Ranking on
 the bundled demos occasionally places module/window chunks above the exact
 buggy function; retrieval narrows the search space, it does not replace the
 agent's read-before-edit discipline. Cross-validating retrieved spans is left
@@ -522,8 +590,8 @@ Other hardening in the same vein:
 ( cd demo_repo_hard && python -m pytest )  # baseline: 5 failed, 9 passed
 ( cd demo_repo_syntax && python -m pytest ) # baseline: collection blocked (SyntaxError)
 ( cd demo_repo_import && python -m pytest ) # baseline: collection blocked (ImportError)
-python -m pytest tests/                   # 150 tests, all passing
-python scripts/verify_rag.py              # one-command RAG + embeddings end-to-end check
+python -m pytest tests/                   # 150 tests, all passing (hermetic; FIXORA_EMBEDDER=hash is set for the session)
+python scripts/verify_rag.py              # one-command RAG + embeddings end-to-end check (FIXORA_EMBEDDER=auto by default)
 cd frontend && npm run build              # TypeScript + Vite production build
 ```
 
@@ -556,7 +624,11 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 - `demo_repo_hard/` — ledgerline (Phase 2 fixture; two related bugs)
 - `demo_repo_syntax/` — skylark (Phase 4 fixture; syntax error blocks collection)
 - `demo_repo_import/` — meridian (Phase 4 fixture; import error blocks collection)
-- `frontend/` — React/TypeScript UI (built with Vite)
+- `frontend/` — React/TypeScript UI (built with Vite); live agent roster in
+  `frontend/src/components/AgentRoster.tsx`
+- `scripts/verify_rag.py` — one-command end-to-end RAG verification (embedder
+  determinism, index stats, failure-driven queries, cross-run memory recall,
+  approval gate, `FIXORA_RAG=0` kill switch)
 - `Dockerfile` / `.dockerignore` — single-image API + built UI
 - `tests/` — unit tests for the sandbox, tools, graph routing, caching,
   approval gate, GitHub validation, provider fallback, hybrid retrieval/AST
@@ -569,5 +641,7 @@ requires `LLM_PROVIDER=groq|xai|anthropic|openai` with a valid key in `.env`.
 ## What is deliberately out of scope
 
 PR creation / pushing branches, multi-tenant auth, billing/cost accounting,
-non-Python targets, a hosted vector database, and persistent (DB-backed) run
-state. See `SPEC.md` for the full list and the phase-by-phase record.
+non-Python targets, a hosted vector database, persistent (DB-backed) run
+state, and multi-process agent federation (the Developer/Tester/Reviewer team
+is one process sharing one LangGraph state). See `SPEC.md` for the full list
+and the phase-by-phase record.

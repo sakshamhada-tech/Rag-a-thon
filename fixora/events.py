@@ -14,6 +14,22 @@ import uuid
 from .security import redact_value
 
 
+# Node names are phase names, not agents: analyse/plan/fix are the Developer
+# agent, test/baseline are the Tester agent, review is the Reviewer agent.
+# Every emitted event is tagged with the responsible agent so the UI can show
+# the team working (used by the agent roster + timeline badges).
+_NODE_AGENT = {
+    "analyse": "developer", "plan": "developer", "fix": "developer",
+    "test": "tester", "baseline": "tester",
+    "review": "reviewer",
+}
+_TYPE_AGENT = {
+    "retrieval": "developer", "memory": "developer", "retry": "developer",
+    "test_result": "tester",
+    "review_verdict": "reviewer",
+}
+
+
 class EventEmitter:
     def __init__(self, run_id: str | None = None):
         self.run_id = run_id or uuid.uuid4().hex[:12]
@@ -24,6 +40,13 @@ class EventEmitter:
 
     def emit(self, type: str, **payload) -> dict:
         payload = redact_value(payload)
+        if not payload.get("agent"):
+            node = str(payload.get("node") or "").lower()
+            payload["agent"] = (_NODE_AGENT.get(node)
+                                or _TYPE_AGENT.get(type)
+                                or None)
+            if payload["agent"] is None:
+                payload.pop("agent")
         with self._lock:
             event = {"seq": self._next_seq, "ts": time.strftime("%H:%M:%S"),
                      "run_id": self.run_id, "type": type, **payload}
