@@ -84,7 +84,7 @@ function DiffFileBlock({ file }: { file: DiffFile }) {
           {open ? <ChevronDown className="icon" /> : <ChevronRight className="icon" />}
           <span className="mono" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.path}</span>
         </span>
-        <span className="mono" style={{ fontSize: 'var(--text-xs)' }}><span style={{ color: 'var(--diff-add-text)' }}>+{file.adds}</span> <span style={{ color: 'var(--diff-del-text)' }}>-{file.dels}</span></span>
+        <span className="mono" style={{ fontSize: 'var(--text-xs)', flex: '0 0 auto', whiteSpace: 'nowrap' }}><span style={{ color: 'var(--diff-add-text)' }}>+{file.adds}</span> <span style={{ color: 'var(--diff-del-text)' }}>-{file.dels}</span></span>
       </button>
       {open && (
         <div role="table" aria-label={`Unified diff for ${file.path}`}>

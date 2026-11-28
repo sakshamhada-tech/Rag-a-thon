@@ -313,7 +313,11 @@ Set `VITE_API_PROXY_TARGET` from a shell if the API is not on port 8000.
   reports product phase and the approval gate.
 - Desktop regions are resizable: hairline separators between setup/timeline and
   timeline/inspector support pointer drag (keyboard: arrow keys, `Shift` for larger
-  steps). No gap between panels; widths persist in `localStorage`. Below 1180px the
+  steps). No gap between panels; widths persist in `localStorage`. Each section has
+  a minimum width (248 / 260 / 320 px for setup / timeline / inspector, enforced
+  in CSS as well as during drags and on browser window resize), all text and cards
+  wrap instead of clipping as panels narrow, and primary action buttons cap at
+  340 px so they do not stretch across a widened section. Below 1180px the
   inspector becomes a slide-over and the right separator hides; below 760px the
   bottom tabs take over and separators hide.
 - SSE replay/live stream uses event sequence ids and `Last-Event-ID`; the reducer

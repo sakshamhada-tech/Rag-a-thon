@@ -145,6 +145,24 @@ export default function App() {
     applySizes(readStoredSizes() ?? sizesRef.current);
   }, [applySizes]);
 
+  // Keep the panels inside the workbench when the browser window itself is
+  // resized — the separation drag clamps below, but window shrinks could
+  // otherwise push the inspector off-screen or squeeze the centre below its min.
+  useEffect(() => {
+    const clampToContainer = () => {
+      const wb = workbenchRef.current;
+      if (!wb) return;
+      const width = wb.getBoundingClientRect().width;
+      const handles = (inspectorOpen ? 2 : 1) * HANDLE_PX;
+      const maxL = Math.max(MIN_LEFT, Math.min(MAX_LEFT, width - MIN_CENTER - (inspectorOpen ? sizesRef.current.inspector : 0) - handles));
+      const maxI = Math.max(MIN_INSPECTOR, Math.min(MAX_INSPECTOR, width - MIN_CENTER - sizesRef.current.left - 2 * HANDLE_PX));
+      applySizes({ left: clamp(sizesRef.current.left, MIN_LEFT, maxL), inspector: clamp(sizesRef.current.inspector, MIN_INSPECTOR, maxI) });
+    };
+    window.addEventListener('resize', clampToContainer);
+    clampToContainer();
+    return () => window.removeEventListener('resize', clampToContainer);
+  }, [applySizes, inspectorOpen]);
+
   // When the inspector closes/opens, clamp the stored left width against the new geometry.
   useEffect(() => {
     const current = sizesRef.current;
